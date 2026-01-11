@@ -32,7 +32,9 @@ jobs:
 
       - name: Build executable
         run: |
-          python -m PyInstaller TrustPalestine.spec
+          if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+          if (Test-Path build) { Remove-Item build -Recurse -Force }
+          python -m PyInstaller -y TrustPalestine.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
