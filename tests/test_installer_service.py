@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable, Sequence
+from unittest.mock import patch
 
 import pytest
 
@@ -151,8 +152,7 @@ def test_direct_download_uses_downloader(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_local_install_finds_installer(tmp_path: Path) -> None:
     installer_path = tmp_path / "crowdstrike_falcon_sensor_1.0.exe"
-    installer_path.write_text("#!/bin/sh\nexit 0\n")
-    installer_path.chmod(0o755)
+    installer_path.write_text("fake binary content")
 
     app = AppEntry(
         category="Security",
@@ -161,5 +161,11 @@ def test_local_install_finds_installer(tmp_path: Path) -> None:
         file_stem="crowdstrike_falcon_sensor",
     )
     service = InstallerService([app], working_dir=tmp_path)
-    result = service.install_selected([app.name])[0]
-    assert result.success
+
+    with patch("subprocess.run") as mock_run, patch("subprocess.Popen") as mock_popen:
+        mock_run.return_value.returncode = 0
+        mock_popen.return_value.returncode = 0
+        result = service.install_selected([app.name])[0]
+
+    assert result.success is True
+    assert "Local install" in result.message
