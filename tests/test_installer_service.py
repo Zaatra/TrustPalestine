@@ -60,15 +60,15 @@ class DummyWingetClient(WingetClient):
 class DummyOfficeInstaller:
     def __init__(self) -> None:
         self.install_calls: list[str] = []
-        self.setup_downloaded = False
+        self.download_calls: list[str] = []
 
     def install(self, app_name: str) -> CommandExecutionResult:
         self.install_calls.append(app_name)
         return CommandExecutionResult(["setup.exe", "/configure", "config.xml"], 0, "done", "")
 
-    def ensure_setup(self) -> CommandExecutionResult | None:
-        self.setup_downloaded = True
-        return CommandExecutionResult(["winget", "install", "Microsoft.OfficeDeploymentTool"], 0, "ok", "")
+    def download(self, app_name: str, *, status_callback=None) -> CommandExecutionResult:
+        self.download_calls.append(app_name)
+        return CommandExecutionResult(["setup.exe", "/download", "config.xml"], 0, "ok", "")
 
 
 @pytest.fixture()
@@ -135,7 +135,7 @@ def test_office_download_triggers_setup_download(office_entry: AppEntry) -> None
     service = _service([office_entry], office_installer=fake_office)
     results = service.download_selected(["Office 2024 LTSC"])
     assert results[0].success
-    assert fake_office.setup_downloaded is True
+    assert fake_office.download_calls == ["Office 2024 LTSC"]
 
 
 class DummyDirectDownloader:
@@ -156,7 +156,7 @@ def test_direct_download_uses_downloader(tmp_path: Path, monkeypatch: pytest.Mon
     )
     downloader = DummyDirectDownloader()
 
-    def fake_download(self: InstallerService, url: str, destination: Path) -> None:  # type: ignore[override]
+    def fake_download(self: InstallerService, url: str, destination: Path, **kwargs) -> None:  # type: ignore[override]
         destination.write_bytes(b"test")
 
     monkeypatch.setattr(InstallerService, "_download_file", fake_download, raising=False)

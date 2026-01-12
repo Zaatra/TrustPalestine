@@ -7,6 +7,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -166,25 +168,45 @@ class OfficeInstaller:
         self._working_dir = Path(working_dir)
         self._winget = winget_client or WingetClient()
         self._template_loader = template_loader
-        self._setup_path = self._working_dir / "setup.exe"
-        self._staging_dir = self._working_dir / "OfficeSetup"
+        self._office_root = self._working_dir / "Office"
 
-    def ensure_setup(self) -> CommandExecutionResult | None:
-        if self._setup_path.exists():
-            return None
+    def office_dir(self, app_name: str) -> Path:
+        return self._office_root / _safe_name(app_name)
+
+    def setup_path(self, app_name: str) -> Path:
+        return self.office_dir(app_name) / "setup.exe"
+
+    def config_path(self, app_name: str) -> Path:
+        return self.office_dir(app_name) / "config.xml"
+
+    def _version_path(self, app_name: str) -> Path:
+        return self.office_dir(app_name) / "setup.version.txt"
+
+    def ensure_setup(self, app_name: str) -> CommandExecutionResult | None:
         if not self._winget.is_available():
             raise WingetError("winget unavailable to fetch Office Deployment Tool")
-        self._staging_dir.mkdir(parents=True, exist_ok=True)
-        override = f"/quiet /extract:{self._staging_dir}"
+        office_dir = self.office_dir(app_name)
+        office_dir.mkdir(parents=True, exist_ok=True)
+        setup_path = self.setup_path(app_name)
+        version_path = self._version_path(app_name)
+        latest_version = None
+        try:
+            latest_version = self._winget.show_package_version("Microsoft.OfficeDeploymentTool")
+        except WingetError:
+            latest_version = None
+        latest_version = latest_version.strip() if latest_version else ""
+        if setup_path.exists() and latest_version and version_path.exists():
+            current_version = version_path.read_text(encoding="utf-8").strip()
+            if current_version == latest_version:
+                return None
+        override = f"/quiet /extract:{office_dir}"
         result = self._winget.install_package(
             "Microsoft.OfficeDeploymentTool",
             override=override,
         )
-        candidate = self._staging_dir / "setup.exe"
-        if candidate.exists():
-            shutil.move(candidate, self._setup_path)
-        if not self._setup_path.exists():
+        if not setup_path.exists():
             raise FileNotFoundError("setup.exe missing after Office Deployment Tool extraction")
+        version_path.write_text(latest_version or "unknown", encoding="utf-8")
         return result
 
     def install(self, app_name: str) -> CommandExecutionResult:
@@ -193,12 +215,32 @@ class OfficeInstaller:
         template_xml = self._template_loader(app_name)
         if not template_xml.strip():
             raise ValueError(f"Office XML template empty for {app_name}")
-        self._staging_dir.mkdir(parents=True, exist_ok=True)
-        config_path = self._staging_dir / "config.xml"
+        office_dir = self.office_dir(app_name)
+        office_dir.mkdir(parents=True, exist_ok=True)
+        config_path = self.config_path(app_name)
         config_path.write_text(template_xml, encoding="utf-8")
-        self.ensure_setup()
-        cmd = [str(self._setup_path), "/configure", str(config_path)]
-        completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        self.ensure_setup(app_name)
+        cmd = [str(self.setup_path(app_name)), "/configure", str(config_path)]
+        completed = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=office_dir)
+        return CommandExecutionResult(cmd, completed.returncode, completed.stdout, completed.stderr)
+
+    def download(self, app_name: str, *, status_callback: Callable[[str], None] | None = None) -> CommandExecutionResult:
+        if not self._template_loader:
+            raise ValueError("Office template loader not configured")
+        template_xml = self._template_loader(app_name)
+        if not template_xml.strip():
+            raise ValueError(f"Office XML template empty for {app_name}")
+        office_dir = self.office_dir(app_name)
+        office_dir.mkdir(parents=True, exist_ok=True)
+        config_path = self.config_path(app_name)
+        config_path.write_text(template_xml, encoding="utf-8")
+        self.ensure_setup(app_name)
+        cmd = [str(self.setup_path(app_name)), "/download", str(config_path)]
+        monitor = _start_speed_monitor(office_dir, app_name, status_callback)
+        try:
+            completed = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=office_dir)
+        finally:
+            _stop_speed_monitor(monitor)
         return CommandExecutionResult(cmd, completed.returncode, completed.stdout, completed.stderr)
 
 
@@ -370,7 +412,7 @@ class InstallerService:
         if app.download_mode == "onlineonly":
             return LocalInstallerInfo(False)
         if app.download_mode == "office":
-            setup_path = self._working_dir / "setup.exe"
+            setup_path = self._office.setup_path(app.name)
             return LocalInstallerInfo(setup_path.exists(), path=setup_path if setup_path.exists() else None)
         search_dirs = [self._working_dir]
         if include_downloads:
@@ -436,7 +478,7 @@ class InstallerService:
         for index, app in enumerate(apps, start=1):
             if status_callback:
                 status_callback(app.name)
-            results.append(self._download_app(app))
+            results.append(self._download_app(app, status_callback=status_callback))
             if progress_callback:
                 progress_callback(index, total, app.name)
         return results
@@ -538,22 +580,20 @@ class InstallerService:
             return self._apply_post_install_steps(app, result)
         return OperationResult(app, "install", False, f"Download mode {app.download_mode} not implemented")
 
-    def _download_app(self, app: AppEntry) -> OperationResult:
+    def _download_app(self, app: AppEntry, *, status_callback: Callable[[str], None] | None = None) -> OperationResult:
         if app.download_mode == "onlineonly":
             return OperationResult(app, "download", True, "Online-only package; offline download not available")
         if app.download_mode == "winget":
-            return self._download_via_winget(app)
+            return self._download_via_winget(app, status_callback=status_callback)
         if app.download_mode == "office":
             try:
-                result = self._office.ensure_setup()
-                message = "setup.exe already present" if result is None else "Downloaded Office Deployment Tool"
-                stdout = result.stdout if result else ""
-                stderr = result.stderr if result else ""
-                return OperationResult(app, "download", True, message, stdout, stderr)
+                result = self._office.download(app.name, status_callback=status_callback)
+                message = "Office download completed" if result.succeeded else "Office download failed"
+                return OperationResult(app, "download", result.succeeded, message, result.stdout, result.stderr)
             except Exception as exc:
                 return OperationResult(app, "download", False, str(exc))
         if app.download_mode == "direct":
-            return self._download_direct(app)
+            return self._download_direct(app, status_callback=status_callback)
         if app.download_mode == "localonly":
             return OperationResult(app, "download", True, "Local-only package; place installer manually")
         return OperationResult(app, "download", False, f"Download mode {app.download_mode} not implemented")
@@ -584,7 +624,12 @@ class InstallerService:
         message = "Installed via winget" if success else "winget install failed"
         return OperationResult(app, "install", success, message, "\n".join(stdout_parts), "\n".join(stderr_parts))
 
-    def _download_via_winget(self, app: AppEntry) -> OperationResult:
+    def _download_via_winget(
+        self,
+        app: AppEntry,
+        *,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> OperationResult:
         if app.source and app.source != "winget":
             return OperationResult(app, "download", True, f"Download not supported for source {app.source}")
         package_ids = self._package_ids_for(app)
@@ -628,6 +673,7 @@ class InstallerService:
                 continue
             temp_dir = target_root / f"temp_{_safe_name(stem)}"
             shutil.rmtree(temp_dir, ignore_errors=True)
+            monitor = _start_speed_monitor(temp_dir, app.name, status_callback)
             try:
                 result = self._winget.download_package(
                     package_id,
@@ -639,6 +685,8 @@ class InstallerService:
                 success = False
                 messages.append(f"{stem}: {exc}")
                 continue
+            finally:
+                _stop_speed_monitor(monitor)
             stdout_parts.append(result.stdout)
             stderr_parts.append(result.stderr)
             if not result.succeeded:
@@ -666,7 +714,12 @@ class InstallerService:
         message = "; ".join(messages) if messages else "No packages downloaded"
         return OperationResult(app, "download", success, message, "\n".join(stdout_parts), "\n".join(stderr_parts))
 
-    def _download_direct(self, app: AppEntry) -> OperationResult:
+    def _download_direct(
+        self,
+        app: AppEntry,
+        *,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> OperationResult:
         downloader = self._direct_downloaders.get(app.name)
         if not downloader:
             return OperationResult(app, "download", False, f"No direct downloader registered for {app.name}")
@@ -683,7 +736,7 @@ class InstallerService:
         if dest_path.exists():
             return OperationResult(app, "download", True, f"Installer already present: {dest_path.name}")
         try:
-            self._download_file(info.url, dest_path)
+            self._download_file(info.url, dest_path, status_callback=status_callback, label=app.name)
         except Exception as exc:
             return OperationResult(app, "download", False, f"Download error: {exc}")
         return OperationResult(app, "download", True, f"Downloaded {dest_path.name}")
@@ -746,10 +799,33 @@ class InstallerService:
         message = "Local install completed" if success else "Local install failed"
         return OperationResult(app, "install", success, message, completed.stdout, completed.stderr)
 
-    def _download_file(self, url: str, destination: Path) -> None:
+    def _download_file(
+        self,
+        url: str,
+        destination: Path,
+        *,
+        status_callback: Callable[[str], None] | None = None,
+        label: str | None = None,
+    ) -> None:
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            destination.write_bytes(response.read())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as handle:
+            last_time = time.monotonic()
+            last_bytes = 0
+            downloaded = 0
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                if status_callback and now - last_time >= 1.0:
+                    delta_bytes = downloaded - last_bytes
+                    speed = delta_bytes / max(now - last_time, 0.001)
+                    status_callback(_format_speed_label(label or "Downloading", speed))
+                    last_time = now
+                    last_bytes = downloaded
 
     def _apply_post_install_steps(self, app: AppEntry, result: OperationResult) -> OperationResult:
         if not result.success:
@@ -833,6 +909,81 @@ def _filename_from_url(url: str) -> str | None:
     if Path(name).suffix.lower() not in {".exe", ".msi"}:
         return None
     return name
+
+
+def _directory_size_bytes(path: Path) -> int:
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for root, _, files in os.walk(path):
+        for filename in files:
+            try:
+                total += (Path(root) / filename).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _format_speed(value: float) -> str:
+    speed = max(value, 0.0)
+    units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
+    for unit in units:
+        if speed < 1024 or unit == units[-1]:
+            return f"{speed:.1f} {unit}"
+        speed /= 1024
+    return f"{speed:.1f} B/s"
+
+
+def _format_speed_label(label: str, speed_bytes_per_sec: float) -> str:
+    return f"{label} ({_format_speed(speed_bytes_per_sec)})"
+
+
+def _monitor_directory_speed(
+    monitor_path: Path,
+    label: str,
+    status_callback: Callable[[str], None],
+    stop_event: threading.Event,
+    *,
+    interval: float = 1.0,
+) -> None:
+    last_size = _directory_size_bytes(monitor_path)
+    last_time = time.monotonic()
+    while not stop_event.wait(interval):
+        size = _directory_size_bytes(monitor_path)
+        now = time.monotonic()
+        delta_bytes = size - last_size
+        speed = delta_bytes / max(now - last_time, 0.001)
+        status_callback(_format_speed_label(label, speed))
+        last_size = size
+        last_time = now
+
+
+def _start_speed_monitor(
+    monitor_path: Path,
+    label: str,
+    status_callback: Callable[[str], None] | None,
+) -> tuple[threading.Event, threading.Thread] | None:
+    if not status_callback:
+        return None
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_monitor_directory_speed,
+        args=(monitor_path, label, status_callback, stop_event),
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_speed_monitor(monitor: tuple[threading.Event, threading.Thread] | None) -> None:
+    if not monitor:
+        return
+    stop_event, thread = monitor
+    stop_event.set()
+    thread.join(timeout=1.0)
 
 
 def _has_crowdstrike_cid(app: AppEntry, settings: UserSettings) -> bool:
