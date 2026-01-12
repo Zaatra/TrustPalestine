@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from allinone_it_config.app_registry import build_registry
 from allinone_it_config.constants import IMMUTABLE_CONFIG
+from allinone_it_config.paths import get_application_directory
 from allinone_it_config.user_settings import SettingsStore
 from ui.install_tab import InstallTab
 from ui.drivers_tab import DriversTab
@@ -58,7 +59,7 @@ class MainWindow(QMainWindow):
             build_registry(self._settings),
             log_callback=self.log_message,
             thread_pool=self._thread_pool,
-            working_dir=Path.cwd(),
+            working_dir=get_application_directory(),
             settings=self._settings,
             settings_store=self._settings_store,
         )
@@ -67,7 +68,7 @@ class MainWindow(QMainWindow):
         return DriversTab(
             log_callback=self.log_message,
             thread_pool=self._thread_pool,
-            working_dir=Path.cwd(),
+            working_dir=get_application_directory(),
             settings=self._settings,
         )
 
