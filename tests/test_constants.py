@@ -38,4 +38,4 @@ def test_winget_ids_preserved() -> None:
 
 def test_registry_has_expected_count() -> None:
     registry = build_registry(UserSettings())
-    assert len(registry.entries) == 20
+    assert len(registry.entries) == 21
