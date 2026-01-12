@@ -25,6 +25,7 @@ class AppEntry:
     vc_key: str | None = None
     local_alt_names: Tuple[str, ...] = ()
     source: str | None = None
+    installer_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,32 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
         crowdstrike_cid = crowdstrike_cid[4:].strip()
     crowdstrike_args = f"/install /quiet /norestart CID={crowdstrike_cid}" if crowdstrike_cid else ""
     crowdstrike_mode = "direct" if settings.crowdstrike_download_url.strip() else "localonly"
+    teamviewer_mode = settings.teamviewer_install_mode.strip().lower()
+    teamviewer_use_msi = teamviewer_mode == "msi"
     teamviewer_args = settings.teamviewer_args.strip()
+    teamviewer_download_mode = "winget"
+    teamviewer_winget_id = "TeamViewer.TeamViewer.Host"
+    teamviewer_file_stem = "teamviewer_host"
+    teamviewer_installer_path = None
+    if teamviewer_use_msi:
+        teamviewer_download_mode = "localonly"
+        teamviewer_winget_id = None
+        teamviewer_file_stem = None
+        teamviewer_installer_path = settings.teamviewer_msi_path.strip() or None
+        parts = ["/qn", "/norestart"]
+        custom_config = settings.teamviewer_customconfig_id.strip()
+        if custom_config:
+            parts.append(f"CUSTOMCONFIGID={custom_config}")
+        assignment_id = settings.teamviewer_assignment_id.strip()
+        if assignment_id:
+            parts.append(f"ASSIGNMENTID={assignment_id}")
+        settings_file = settings.teamviewer_settings_file.strip()
+        if settings_file:
+            quoted_file = settings_file
+            if not (settings_file.startswith('"') and settings_file.endswith('"')):
+                quoted_file = f'"{settings_file}"'
+            parts.append(f"SETTINGSFILE={quoted_file}")
+        teamviewer_args = " ".join(parts)
     return AppRegistry(
         entries=[
             # VC++ Redistributables (dual-arch)
@@ -162,11 +188,12 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
             AppEntry(
                 category="Core Applications",
                 name="TeamViewer",
-                download_mode="winget",
+                download_mode=teamviewer_download_mode,
                 args=teamviewer_args,
-                winget_id="TeamViewer.TeamViewer.Host",
+                winget_id=teamviewer_winget_id,
                 detection_pattern="TeamViewer",
-                file_stem="teamviewer_host",
+                file_stem=teamviewer_file_stem,
+                installer_path=teamviewer_installer_path,
             ),
             AppEntry(
                 category="Core Applications",

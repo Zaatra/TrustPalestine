@@ -251,6 +251,21 @@ class InstallTab(QWidget):
             if "winrar".lower() in selected:
                 if not _file_exists(self._settings.winrar_license_path):
                     missing.append("WinRAR license file path")
+            if "teamviewer".lower() in selected:
+                if self._settings.teamviewer_install_mode.strip().lower() == "msi":
+                    if not _file_exists(self._settings.teamviewer_msi_path):
+                        missing.append("TeamViewer MSI path")
+                    if not self._settings.teamviewer_customconfig_id.strip():
+                        missing.append("TeamViewer CUSTOMCONFIGID")
+                    if not self._settings.teamviewer_assignment_id.strip():
+                        missing.append("TeamViewer ASSIGNMENTID")
+                    settings_file = self._settings.teamviewer_settings_file.strip()
+                    if not settings_file:
+                        missing.append("TeamViewer SETTINGSFILE path")
+                    elif not settings_file.lower().endswith(".tvopt"):
+                        missing.append("TeamViewer SETTINGSFILE must end with .tvopt")
+                    elif not _file_exists(settings_file):
+                        missing.append("TeamViewer SETTINGSFILE path")
         return missing
 
     def _selected_apps(self) -> list[str]:

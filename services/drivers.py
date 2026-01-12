@@ -51,6 +51,17 @@ class SubprocessRunner:
         return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
+def _resolve_legacy_repo_root(root: str | Path | None) -> Path:
+    if root is None:
+        return Path(IMMUTABLE_CONFIG.ids.hp_legacy_repo_root)
+    if isinstance(root, str):
+        cleaned = root.strip()
+        if not cleaned:
+            return Path(IMMUTABLE_CONFIG.ids.hp_legacy_repo_root)
+        return Path(cleaned)
+    return Path(root)
+
+
 class HPIAClient:
     def __init__(
         self,
@@ -213,8 +224,7 @@ class CMSLClient:
 
 class LegacyRepository:
     def __init__(self, root: str | Path | None = None) -> None:
-        repo_root = root or IMMUTABLE_CONFIG.ids.hp_legacy_repo_root
-        self._root = Path(repo_root)
+        self._root = _resolve_legacy_repo_root(root)
 
     def list_packages(self, platform_id: str | None, model: str | None) -> list[DriverRecord]:
         candidates = []
@@ -261,6 +271,7 @@ class DriverService:
         self,
         *,
         working_dir: Path | str | None = None,
+        legacy_repo_root: str | Path | None = None,
         hpia_client: HPIAClient | None = None,
         cmsl_client: CMSLClient | None = None,
         legacy_repo: LegacyRepository | None = None,
@@ -271,7 +282,7 @@ class DriverService:
         self._runner = command_runner or SubprocessRunner()
         self._hpia = hpia_client or HPIAClient(self._working_dir)
         self._cmsl = cmsl_client or CMSLClient()
-        self._legacy = legacy_repo or LegacyRepository()
+        self._legacy = legacy_repo or LegacyRepository(legacy_repo_root)
         self._system_info_provider = system_info_provider or (lambda: HPSystemInfo())
 
     def scan(self) -> list[DriverRecord]:

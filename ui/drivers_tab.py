@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from allinone_it_config.user_settings import UserSettings
 from services.drivers import DriverOperationResult, DriverRecord, DriverService
 from ui.workers import ServiceWorker
 
@@ -30,14 +31,24 @@ class DriversTab(QWidget):
         thread_pool: QThreadPool,
         *,
         working_dir: Path | None = None,
+        settings: UserSettings | None = None,
     ) -> None:
         super().__init__()
         self._log = log_callback
         self._thread_pool = thread_pool
-        self._service = DriverService(working_dir=working_dir or Path.cwd())
+        self._working_dir = working_dir or Path.cwd()
+        self._settings = settings or UserSettings()
+        self._refresh_service()
         self._records: list[DriverRecord] = []
         self._busy = False
         self._build_ui()
+
+    def _refresh_service(self) -> None:
+        legacy_root = self._settings.hp_legacy_repo_root.strip()
+        self._service = DriverService(
+            working_dir=self._working_dir,
+            legacy_repo_root=legacy_root or None,
+        )
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -81,6 +92,7 @@ class DriversTab(QWidget):
     def _start_scan(self) -> None:
         if self._busy:
             return
+        self._refresh_service()
         self._busy = True
         self._set_buttons_enabled(False)
         self._log("Scanning for HP driver updates...")

@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
             log_callback=self.log_message,
             thread_pool=self._thread_pool,
             working_dir=Path.cwd(),
+            settings=self._settings,
         )
 
     def _create_system_tab(self) -> QWidget:

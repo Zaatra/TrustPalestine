@@ -356,6 +356,11 @@ class InstallerService:
         return True
 
     def get_local_installer_info(self, app: AppEntry, *, include_downloads: bool = True) -> LocalInstallerInfo:
+        if app.installer_path:
+            candidate = Path(app.installer_path)
+            if candidate.exists() and candidate.is_file():
+                return LocalInstallerInfo(True, path=candidate)
+            return LocalInstallerInfo(False)
         if app.download_mode == "onlineonly":
             return LocalInstallerInfo(False)
         if app.download_mode == "office":
@@ -666,7 +671,10 @@ class InstallerService:
         return ids
 
     def _run_local_installer(self, app: AppEntry, path: Path) -> OperationResult:
-        cmd = [str(path)]
+        if path.suffix.lower() == ".msi":
+            cmd = ["msiexec", "/i", str(path)]
+        else:
+            cmd = [str(path)]
         if app.args:
             cmd.extend(shlex.split(app.args))
         completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
