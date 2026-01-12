@@ -346,6 +346,9 @@ class InstallTab(QWidget):
             row = self._row_by_name.get(app.name)
             if row is None:
                 continue
+            if app.name == "Office Deployment Tool":
+                self._set_item_text(row, self.COL_OFFLINE, "Managed")
+                continue
             local_info = self._service.get_local_installer_info(app, include_downloads=True)
             if local_info.exists:
                 text = "Ready"

@@ -225,6 +225,12 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
                 winget_id="Microsoft.OfficeDeploymentTool",
                 detection_pattern="Microsoft 365 Apps",
             ),
+            AppEntry(
+                category="Core Applications",
+                name="Office Deployment Tool",
+                download_mode="onlineonly",
+                winget_id="Microsoft.OfficeDeploymentTool",
+            ),
             # Drivers & Support Tools
             AppEntry(
                 category="Driver & Support Tools",

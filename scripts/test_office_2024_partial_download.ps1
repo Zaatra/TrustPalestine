@@ -3,7 +3,7 @@ param(
     [int]$LimitMB = 10
 )
 
-$OfficeDir = Join-Path (Join-Path $Root "Office") "office_2024_ltsc"
+$OfficeDir = Join-Path $Root "office_2024_ltsc"
 $SetupPath = Join-Path $OfficeDir "setup.exe"
 $ConfigPath = Join-Path $OfficeDir "config.xml"
 

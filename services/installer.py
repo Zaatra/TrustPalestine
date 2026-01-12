@@ -168,7 +168,8 @@ class OfficeInstaller:
         self._working_dir = Path(working_dir)
         self._winget = winget_client or WingetClient()
         self._template_loader = template_loader
-        self._office_root = self._working_dir / "Office"
+        self._office_root = self._working_dir
+        self._odt_version_dir = self._working_dir / "odt_versions"
 
     def office_dir(self, app_name: str) -> Path:
         return self._office_root / _safe_name(app_name)
@@ -180,7 +181,22 @@ class OfficeInstaller:
         return self.office_dir(app_name) / "config.xml"
 
     def _version_path(self, app_name: str) -> Path:
-        return self.office_dir(app_name) / "setup.version.txt"
+        return self._odt_version_dir / f"{_safe_name(app_name)}.txt"
+
+    def _clean_office_dir(self, office_dir: Path) -> None:
+        if not office_dir.exists():
+            return
+        keep = {"setup.exe", "config.xml"}
+        for entry in office_dir.iterdir():
+            if entry.name.lower() in keep:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                try:
+                    entry.unlink()
+                except OSError:
+                    continue
 
     def ensure_setup(self, app_name: str) -> CommandExecutionResult | None:
         if not self._winget.is_available():
@@ -206,6 +222,7 @@ class OfficeInstaller:
         )
         if not setup_path.exists():
             raise FileNotFoundError("setup.exe missing after Office Deployment Tool extraction")
+        version_path.parent.mkdir(parents=True, exist_ok=True)
         version_path.write_text(latest_version or "unknown", encoding="utf-8")
         return result
 
@@ -235,13 +252,10 @@ class OfficeInstaller:
         config_path = self.config_path(app_name)
         config_path.write_text(template_xml, encoding="utf-8")
         self.ensure_setup(app_name)
+        self._clean_office_dir(office_dir)
         cmd = [str(self.setup_path(app_name)), "/download", str(config_path)]
-        monitor = _start_speed_monitor(office_dir, app_name, status_callback)
-        try:
-            completed = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=office_dir)
-        finally:
-            _stop_speed_monitor(monitor)
-        return CommandExecutionResult(cmd, completed.returncode, completed.stdout, completed.stderr)
+        completed = _run_office_download(cmd, office_dir, label=app_name, status_callback=status_callback)
+        return completed
 
 
 @dataclass(frozen=True)
@@ -537,6 +551,8 @@ class InstallerService:
         return OperationResult(app, "install", False, "Local installer not found")
 
     def _install_app(self, app: AppEntry) -> OperationResult:
+        if app.name == "Office Deployment Tool":
+            return OperationResult(app, "install", True, "ODT is managed automatically with Office downloads")
         if app.name == "CrowdStrike Falcon Sensor" and not _has_crowdstrike_cid(app, self._settings):
             return OperationResult(app, "install", False, "CrowdStrike CID not configured in settings")
         if app.download_mode in {"winget", "onlineonly"}:
@@ -581,6 +597,8 @@ class InstallerService:
         return OperationResult(app, "install", False, f"Download mode {app.download_mode} not implemented")
 
     def _download_app(self, app: AppEntry, *, status_callback: Callable[[str], None] | None = None) -> OperationResult:
+        if app.name == "Office Deployment Tool":
+            return OperationResult(app, "download", True, "ODT is managed automatically with Office downloads")
         if app.download_mode == "onlineonly":
             return OperationResult(app, "download", True, "Online-only package; offline download not available")
         if app.download_mode == "winget":
@@ -589,6 +607,8 @@ class InstallerService:
             try:
                 result = self._office.download(app.name, status_callback=status_callback)
                 message = "Office download completed" if result.succeeded else "Office download failed"
+                if result.succeeded and "ODT_IDLE_TIMEOUT" in result.stderr:
+                    message = "Office download completed (setup.exe stopped after inactivity)"
                 return OperationResult(app, "download", result.succeeded, message, result.stdout, result.stderr)
             except Exception as exc:
                 return OperationResult(app, "download", False, str(exc))
@@ -939,6 +959,54 @@ def _format_speed(value: float) -> str:
 
 def _format_speed_label(label: str, speed_bytes_per_sec: float) -> str:
     return f"{label} ({_format_speed(speed_bytes_per_sec)})"
+
+
+def _run_office_download(
+    cmd: Sequence[str],
+    working_dir: Path,
+    *,
+    label: str,
+    status_callback: Callable[[str], None] | None,
+    idle_timeout: float = 180.0,
+    interval: float = 1.0,
+) -> CommandExecutionResult:
+    proc = subprocess.Popen(cmd, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    last_size = _directory_size_bytes(working_dir)
+    last_time = time.monotonic()
+    last_change = last_time
+    had_activity = False
+    terminated_for_idle = False
+    while True:
+        if proc.poll() is not None:
+            break
+        time.sleep(interval)
+        size = _directory_size_bytes(working_dir)
+        now = time.monotonic()
+        delta_bytes = size - last_size
+        speed = delta_bytes / max(now - last_time, 0.001)
+        if status_callback:
+            status_callback(_format_speed_label(label, speed))
+        if delta_bytes > 0:
+            had_activity = True
+            last_change = now
+        if idle_timeout and (now - last_change) >= idle_timeout:
+            terminated_for_idle = True
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            break
+        last_size = size
+        last_time = now
+    stdout, stderr = proc.communicate()
+    returncode = proc.returncode or 0
+    if terminated_for_idle:
+        returncode = 0 if had_activity else (proc.returncode or 1)
+        note = f"ODT_IDLE_TIMEOUT: no download activity for {int(idle_timeout)}s; setup.exe terminated."
+        stderr = f"{stderr}\n{note}" if stderr else note
+    return CommandExecutionResult(cmd, returncode, stdout or "", stderr or "")
 
 
 def _monitor_directory_speed(

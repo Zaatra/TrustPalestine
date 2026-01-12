@@ -76,6 +76,33 @@ class AppStatusService:
         entries = self._read_uninstall_entries()
         results: list[InstalledInfo] = []
         for app in self._apps:
+            if app.name == "Office Deployment Tool":
+                version = self._get_local_odt_version()
+                if version:
+                    results.append(
+                        InstalledInfo(
+                            app=app,
+                            installed_text=version,
+                            installed_version=version,
+                            installed_x86=None,
+                            installed_x64=None,
+                            is_installed=True,
+                            is_known=True,
+                        )
+                    )
+                else:
+                    results.append(
+                        InstalledInfo(
+                            app=app,
+                            installed_text=_STATUS_NOT_INSTALLED,
+                            installed_version=None,
+                            installed_x86=None,
+                            installed_x64=None,
+                            is_installed=False,
+                            is_known=True,
+                        )
+                    )
+                continue
             if app.dual_arch and app.vc_key:
                 vc_map = self._get_vc_installed_map(app.vc_key, entries)
                 installed_text = self._format_vc_versions(vc_map)
@@ -291,6 +318,48 @@ class AppStatusService:
         x64 = vc_map.get("x64") or "Missing"
         return f"x86: {x86} | x64: {x64}"
 
+    def _get_local_odt_version(self) -> str | None:
+        version_dir = self._working_dir / "odt_versions"
+        if not version_dir.exists():
+            version_dir = None
+        best_value: tuple[tuple[int, ...], str] | None = None
+        fallback: str | None = None
+        if version_dir:
+            for path in version_dir.glob("*.txt"):
+                try:
+                    value = path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    continue
+                if not value:
+                    continue
+                normalized = _normalize_version(value)
+                if normalized:
+                    version_key = _version_tuple(normalized)
+                    if version_key:
+                        if best_value is None or version_key > best_value[0]:
+                            best_value = (version_key, normalized)
+                        continue
+                if fallback is None:
+                    fallback = value
+        if not best_value and not fallback:
+            legacy_root = self._working_dir / "Office"
+            legacy_paths = [
+                legacy_root / "office_2024_ltsc" / "setup.version.txt",
+                legacy_root / "office_365_ent" / "setup.version.txt",
+            ]
+            for path in legacy_paths:
+                if not path.exists():
+                    continue
+                try:
+                    value = path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    continue
+                if value:
+                    return _normalize_version(value) or value
+        if best_value:
+            return best_value[1]
+        return fallback
+
     def _get_latest_version(self, app: AppEntry) -> str:
         if app.name == "Office 2024 LTSC":
             return self._get_office_latest("https://learn.microsoft.com/en-us/officeupdates/update-history-office-2024")
@@ -399,7 +468,7 @@ class AppStatusService:
             if ok:
                 return _STATUS_UP_TO_DATE, _LEVEL_UP_TO_DATE
             return _STATUS_UPDATE_AVAILABLE, _LEVEL_UPDATE_AVAILABLE
-        if app.name.startswith("Office"):
+        if app.name in {"Office 2024 LTSC", "Office 365 Ent"}:
             ok = self._office_versions_ok(info.installed_text, latest_text)
             if ok:
                 return _STATUS_UP_TO_DATE, _LEVEL_UP_TO_DATE
