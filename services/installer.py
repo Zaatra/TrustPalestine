@@ -35,6 +35,8 @@ class WingetError(RuntimeError):
 class WingetClient:
     """Thin wrapper around the winget CLI."""
 
+    VERSION_PATTERN = re.compile(r"Version\s*:\s*(.+)", re.IGNORECASE)
+
     def __init__(self, executable: str | None = None):
         exe_path = executable or shutil.which("winget")
         self._executable = Path(exe_path) if exe_path else None
@@ -70,6 +72,21 @@ class WingetClient:
         cmd = self._build_base_command("download", package_id, source, force)
         cmd.extend(["-d", str(destination)])
         return self._run(cmd)
+
+    def show_package_version(self, package_id: str, *, source: str | None = None) -> str | None:
+        if not self._executable:
+            raise WingetError("winget executable not found in PATH")
+        cmd = [str(self._executable), "show", "--id", package_id, "--exact", "--accept-source-agreements", "--locale", "en-US"]
+        if source:
+            cmd.extend(["--source", source])
+        result = self._run(cmd)
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            match = self.VERSION_PATTERN.search(line)
+            if match:
+                return match.group(1).strip()
+        return None
 
     def _build_base_command(
         self,

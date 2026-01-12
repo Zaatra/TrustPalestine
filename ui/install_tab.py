@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -17,14 +18,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from services.app_status import AppStatusService, AppUpdateResult, InstalledInfo
 from services.installer import InstallerService, OperationResult
-from trustpal.app_registry import AppEntry, AppRegistry
+from trustpal.app_registry import AppRegistry
 from ui.workers import ServiceWorker
 
 LogCallback = Callable[[str], None]
 
 
 class InstallTab(QWidget):
+    COL_SELECT = 0
+    COL_CATEGORY = 1
+    COL_APP = 2
+    COL_INSTALLED = 3
+    COL_LATEST = 4
+    COL_STATUS = 5
+    COL_MODE = 6
+
     def __init__(
         self,
         registry: AppRegistry,
@@ -37,9 +47,14 @@ class InstallTab(QWidget):
         self._registry = registry
         self._log = log_callback
         self._thread_pool = thread_pool
-        self._service = InstallerService(registry.entries, working_dir=working_dir or Path.cwd())
+        self._working_dir = working_dir or Path.cwd()
+        self._service = InstallerService(registry.entries, working_dir=self._working_dir)
+        self._status_service = AppStatusService(registry.entries, working_dir=self._working_dir)
+        self._installed_map: dict[str, InstalledInfo] = {}
+        self._row_by_name: dict[str, int] = {}
         self._busy = False
         self._build_ui()
+        self._start_installed_scan()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -47,25 +62,32 @@ class InstallTab(QWidget):
         button_row = QHBoxLayout()
         self._btn_download = QPushButton("Download Selected")
         self._btn_install = QPushButton("Install Selected")
+        self._btn_check_updates = QPushButton("Check for Updates")
         self._btn_select_all = QPushButton("Select All")
         self._btn_select_none = QPushButton("Select None")
         button_row.addWidget(self._btn_download)
         button_row.addWidget(self._btn_install)
+        button_row.addWidget(self._btn_check_updates)
         button_row.addStretch()
         button_row.addWidget(self._btn_select_all)
         button_row.addWidget(self._btn_select_none)
         layout.addLayout(button_row)
 
-        self._table = QTableWidget(len(self._registry.entries), 4, self)
-        self._table.setHorizontalHeaderLabels(["Select", "Category", "Application", "Mode"])
+        self._table = QTableWidget(len(self._registry.entries), 7, self)
+        self._table.setHorizontalHeaderLabels(
+            ["Select", "Category", "Application", "Installed", "Latest", "Status", "Mode"]
+        )
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
         header = self._table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_SELECT, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_CATEGORY, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_APP, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(self.COL_INSTALLED, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_LATEST, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_MODE, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self._table)
 
         for row, app in enumerate(self._registry.entries):
@@ -73,14 +95,19 @@ class InstallTab(QWidget):
             checkbox.setFlags(Qt.ItemIsSelectable | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             checkbox.setCheckState(Qt.Unchecked)
             checkbox.setData(Qt.UserRole, app.name)
-            self._table.setItem(row, 0, checkbox)
+            self._table.setItem(row, self.COL_SELECT, checkbox)
 
-            self._table.setItem(row, 1, QTableWidgetItem(app.category))
-            self._table.setItem(row, 2, QTableWidgetItem(app.name))
-            self._table.setItem(row, 3, QTableWidgetItem(app.download_mode))
+            self._table.setItem(row, self.COL_CATEGORY, QTableWidgetItem(app.category))
+            self._table.setItem(row, self.COL_APP, QTableWidgetItem(app.name))
+            self._table.setItem(row, self.COL_INSTALLED, QTableWidgetItem("Scanning..."))
+            self._table.setItem(row, self.COL_LATEST, QTableWidgetItem(""))
+            self._table.setItem(row, self.COL_STATUS, QTableWidgetItem("Pending"))
+            self._table.setItem(row, self.COL_MODE, QTableWidgetItem(app.download_mode))
+            self._row_by_name[app.name] = row
 
         self._btn_download.clicked.connect(lambda: self._start_action("download_selected"))
         self._btn_install.clicked.connect(lambda: self._start_action("install_selected"))
+        self._btn_check_updates.clicked.connect(self._start_update_check)
         self._btn_select_all.clicked.connect(self._select_all)
         self._btn_select_none.clicked.connect(self._select_none)
 
@@ -121,6 +148,8 @@ class InstallTab(QWidget):
             self._log(f"[{status}] {action} :: {result.app.name} -> {result.message}")
         self._busy = False
         self._set_buttons_enabled(True)
+        if action == "install_selected":
+            self._start_installed_scan()
 
     def _handle_error(self, message: str) -> None:
         self._log(f"[ERROR] {message}")
@@ -138,5 +167,100 @@ class InstallTab(QWidget):
         return selection
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
-        for button in (self._btn_download, self._btn_install, self._btn_select_all, self._btn_select_none):
+        for button in (
+            self._btn_download,
+            self._btn_install,
+            self._btn_check_updates,
+            self._btn_select_all,
+            self._btn_select_none,
+        ):
             button.setEnabled(enabled)
+
+    def _start_installed_scan(self) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        self._set_buttons_enabled(False)
+        self._log("Scanning installed applications...")
+        worker = ServiceWorker(self._status_service.scan_installed)
+        worker.signals.finished.connect(self._handle_installed_results)
+        worker.signals.error.connect(self._handle_error)
+        self._thread_pool.start(worker)
+
+    def _handle_installed_results(self, results: Iterable[InstalledInfo]) -> None:
+        self._installed_map = {info.app.name: info for info in results}
+        for info in results:
+            row = self._row_by_name.get(info.app.name)
+            if row is None:
+                continue
+            self._set_item_text(row, self.COL_INSTALLED, info.installed_text)
+            self._set_item_text(row, self.COL_LATEST, "")
+            status_text, level = self._status_for_installed(info)
+            self._set_item_text(row, self.COL_STATUS, status_text)
+            self._apply_status_color(row, level)
+        self._busy = False
+        self._set_buttons_enabled(True)
+
+    def _start_update_check(self) -> None:
+        if self._busy:
+            QMessageBox.information(self, "In Progress", "Please wait for the current operation to complete.")
+            return
+        self._busy = True
+        self._set_buttons_enabled(False)
+        self._log("Checking latest application versions...")
+        for row in range(self._table.rowCount()):
+            self._set_item_text(row, self.COL_LATEST, "Checking...")
+            self._set_item_text(row, self.COL_STATUS, "Checking")
+            self._apply_status_color(row, "checking")
+        installed_map = dict(self._installed_map) or None
+        worker = ServiceWorker(self._status_service.check_updates, installed_map)
+        worker.signals.finished.connect(self._handle_update_results)
+        worker.signals.error.connect(self._handle_error)
+        self._thread_pool.start(worker)
+
+    def _handle_update_results(self, results: Iterable[AppUpdateResult]) -> None:
+        for result in results:
+            row = self._row_by_name.get(result.app.name)
+            if row is None:
+                continue
+            self._set_item_text(row, self.COL_INSTALLED, result.installed_text)
+            self._set_item_text(row, self.COL_LATEST, result.latest_text)
+            self._set_item_text(row, self.COL_STATUS, result.status)
+            self._apply_status_color(row, result.status_level)
+        self._busy = False
+        self._set_buttons_enabled(True)
+
+    def _set_item_text(self, row: int, column: int, text: str) -> None:
+        item = self._table.item(row, column)
+        if item is None:
+            item = QTableWidgetItem(text)
+            self._table.setItem(row, column, item)
+        else:
+            item.setText(text)
+
+    def _status_for_installed(self, info: InstalledInfo) -> tuple[str, str]:
+        if not info.is_known:
+            return "Unknown", "unknown"
+        if info.is_installed:
+            return "Installed", "installed"
+        return "Not Installed", "not_installed"
+
+    def _apply_status_color(self, row: int, level: str) -> None:
+        color = self._status_color(level)
+        if color is None:
+            return
+        for col in range(self.COL_CATEGORY, self.COL_MODE + 1):
+            item = self._table.item(row, col)
+            if item:
+                item.setForeground(color)
+
+    def _status_color(self, level: str) -> QColor | None:
+        palette = {
+            "up_to_date": QColor("#2ecc71"),
+            "update_available": QColor("#f39c12"),
+            "not_installed": QColor("#e74c3c"),
+            "installed": QColor("#27ae60"),
+            "unknown": QColor("#9aa7b2"),
+            "checking": QColor("#f1c40f"),
+        }
+        return palette.get(level)
