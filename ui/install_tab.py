@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QHBoxLayout,
     QMessageBox,
     QPushButton,
@@ -61,10 +62,10 @@ class InstallTab(QWidget):
         self._table.verticalHeader().setVisible(False)
         header = self._table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, header.ResizeToContents)
-        header.setSectionResizeMode(1, header.ResizeToContents)
-        header.setSectionResizeMode(2, header.Stretch)
-        header.setSectionResizeMode(3, header.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self._table)
 
         for row, app in enumerate(self._registry.entries):

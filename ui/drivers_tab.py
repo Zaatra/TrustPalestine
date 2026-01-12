@@ -7,6 +7,7 @@ from typing import Callable, Iterable, List
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QHBoxLayout,
     QMessageBox,
     QPushButton,
@@ -63,12 +64,12 @@ class DriversTab(QWidget):
         self._table.verticalHeader().setVisible(False)
         header = self._table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, header.ResizeToContents)
-        header.setSectionResizeMode(1, header.ResizeToContents)
-        header.setSectionResizeMode(2, header.Stretch)
-        header.setSectionResizeMode(3, header.ResizeToContents)
-        header.setSectionResizeMode(4, header.ResizeToContents)
-        header.setSectionResizeMode(5, header.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self._table)
 
         self._btn_scan.clicked.connect(self._start_scan)
