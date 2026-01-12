@@ -76,19 +76,24 @@ class WingetClient:
         *,
         source: str | None = None,
         version: str | None = None,
+        locale: str | None = None,
         force: bool = True,
     ) -> CommandExecutionResult:
         destination.mkdir(parents=True, exist_ok=True)
         cmd = self._build_base_command("download", package_id, source, force)
         if version:
             cmd.extend(["--version", version])
-        cmd.extend(["--locale", "en-US", "--disable-interactivity", "--verbose", "-d", str(destination)])
+        if locale:
+            cmd.extend(["--locale", locale])
+        cmd.extend(["--disable-interactivity", "--verbose", "-d", str(destination)])
         return self._run(cmd)
 
-    def show_package_version(self, package_id: str, *, source: str | None = None) -> str | None:
+    def show_package_version(self, package_id: str, *, source: str | None = None, locale: str | None = None) -> str | None:
         if not self._executable:
             raise WingetError("winget executable not found in PATH")
-        cmd = [str(self._executable), "show", "--id", package_id, "--exact", "--accept-source-agreements", "--locale", "en-US"]
+        cmd = [str(self._executable), "show", "--id", package_id, "--exact", "--accept-source-agreements"]
+        if locale:
+            cmd.extend(["--locale", locale])
         if source:
             cmd.extend(["--source", source])
         result = self._run(cmd)

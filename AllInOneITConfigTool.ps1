@@ -478,7 +478,7 @@ function Get-WingetVer {
     if (-not $exe) { return "Winget Missing" }
 
     try {
-        $out = & $exe show --id $Id --source $Source --accept-source-agreements --locale en-US 2>&1 | Out-String -Stream
+        $out = & $exe show --id $Id --source $Source --accept-source-agreements 2>&1 | Out-String -Stream
         foreach ($line in $out) {
             if ($line -match 'Version\s*:\s*([0-9a-zA-Z._-]+)') {
                 return (Normalize-VersionString $Matches[1].Trim())
@@ -2341,7 +2341,7 @@ function Winget-Download-And-Rename {
     if (Test-Path $dlDir) { Remove-Item $dlDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $dlDir | Out-Null
 
-    & $WingetExe download --id $Id -d $dlDir --accept-source-agreements --accept-package-agreements --force --locale en-US | Out-Null
+    & $WingetExe download --id $Id -d $dlDir --accept-source-agreements --accept-package-agreements --force | Out-Null
 
     $dlFile = Get-ChildItem $dlDir -File -Recurse -ErrorAction SilentlyContinue |
               Where-Object { $_.Extension -match '^\.(exe|msi)$' } |
