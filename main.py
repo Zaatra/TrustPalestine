@@ -1,4 +1,4 @@
-"""Application entrypoint for the Trust Palestine PySide6 GUI."""
+"""Application entrypoint for the All-In-One IT Configuration Tool PySide6 GUI."""
 from __future__ import annotations
 
 import sys

@@ -1,6 +1,6 @@
-# Trust Palestine IT Configuration Tool (Python Port)
+# All-In-One IT Configuration Tool (Python Port)
 
-This repository contains the PySide6-based rewrite of the original `TrustInstaller.ps1` utility. It maintains the immutable deployment values (timezone, locale, WinGet IDs, Office XML templates) and exposes the same workflows across three tabs:
+This repository contains the PySide6-based rewrite of the original `AllInOneITConfigTool.ps1` utility. It maintains the immutable deployment values (timezone, locale, WinGet IDs, Office XML templates) and exposes the same workflows across three tabs:
 
 1. **Applications** – Download/install software via WinGet, Office ODT, direct installers, or local archives.
 2. **Drivers** – Scan HP systems with HPIA/CMSL or fall back to the legacy repo, then download/install SoftPaqs in batch.
@@ -22,12 +22,12 @@ PySide6 requires a desktop session. When launching through Remote Desktop or WSL
 PyInstaller can reproduce the binary bundle created during development:
 
 ```bash
-python -m PyInstaller TrustPalestine.spec
+python -m PyInstaller AllInOneITConfigTool.spec
 ```
 
-- Linux hosts produce an ELF binary inside `dist/TrustPalestine/`.
+- Linux hosts produce an ELF binary inside `dist/AllInOneITConfigTool/`.
 - To create a Windows `.exe`, run the same command **on Windows** (PyInstaller does not cross-compile).
-- The bundle already includes PySide6, `trustpal/`, `services/`, and supporting modules.
+- The bundle already includes PySide6, `allinone_it_config/`, `services/`, and supporting modules.
 
 ## Manual Acceptance Tests
 
@@ -82,9 +82,9 @@ Place a sample `manifest.json` + dummy installers beneath the path referenced by
 After running PyInstaller, execute the binary from a terminal to ensure it starts:
 
 ```bash
-cd dist/TrustPalestine
-./TrustPalestine  # Linux
-TrustPalestine.exe  # Windows build
+cd dist/AllInOneITConfigTool
+./AllInOneITConfigTool  # Linux
+AllInOneITConfigTool.exe  # Windows build
 ```
 
 Use `QT_QPA_PLATFORM=offscreen` if running on a headless CI agent.
@@ -92,5 +92,5 @@ Use `QT_QPA_PLATFORM=offscreen` if running on a headless CI agent.
 ## Contributing / Support
 
 - Run `python -m pytest` before submitting changes.
-- Immutable values live in `trustpal/constants.py` and must not change; tests will fail if they do.
-- When adding new applications, use `trustpal/app_registry.py` to preserve centralized metadata.
+- Immutable values live in `allinone_it_config/constants.py` and must not change; tests will fail if they do.
+- When adding new applications, use `allinone_it_config/app_registry.py` to preserve centralized metadata.

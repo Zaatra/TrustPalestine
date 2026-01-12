@@ -1,8 +1,8 @@
 """Regression checks for immutable data migrated from PowerShell."""
 from __future__ import annotations
 
-from trustpal.app_registry import REGISTRY
-from trustpal.constants import IMMUTABLE_CONFIG
+from allinone_it_config.app_registry import REGISTRY
+from allinone_it_config.constants import IMMUTABLE_CONFIG
 
 
 def test_timezone_is_west_bank() -> None:

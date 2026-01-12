@@ -13,7 +13,7 @@ from services.installer import (
     OperationResult,
     WingetClient,
 )
-from trustpal.app_registry import AppEntry
+from allinone_it_config.app_registry import AppEntry
 
 
 class DummyWingetClient(WingetClient):

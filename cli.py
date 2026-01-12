@@ -5,7 +5,7 @@ import argparse
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="TrustPalestine automation CLI")
+    parser = argparse.ArgumentParser(description="All-In-One IT Configuration Tool automation CLI")
     parser.add_argument("command", help="Operation to run", choices=["check", "apply", "install", "drivers"])
     parser.parse_args()
     # Implementation placeholder: will dispatch into services layer in later steps.

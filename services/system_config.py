@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Iterable, Protocol, Sequence
 
-from trustpal.constants import FixedSystemConfig
+from allinone_it_config.constants import FixedSystemConfig
 
 try:  # Windows-only dependency, optional for test doubles
     import winreg  # type: ignore

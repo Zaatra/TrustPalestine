@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from services.system_config import ConfigCheckResult, SystemConfigService
-from trustpal.constants import FixedSystemConfig
+from allinone_it_config.constants import FixedSystemConfig
 from ui.workers import ServiceWorker
 
 LogCallback = Callable[[str], None]
@@ -41,7 +41,7 @@ class SystemTab(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        description = QLabel("System status compared against Trust Palestine policy values")
+        description = QLabel("System status compared against All-In-One IT Configuration Tool policy values")
         layout.addWidget(description)
 
         grid = QGridLayout()

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence
 
-from trustpal.app_registry import AppEntry
-from trustpal.constants import IMMUTABLE_CONFIG, OfficeTemplate
+from allinone_it_config.app_registry import AppEntry
+from allinone_it_config.constants import IMMUTABLE_CONFIG, OfficeTemplate
 
 
 @dataclass

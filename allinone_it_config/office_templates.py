@@ -1,7 +1,7 @@
 """Helpers for Office Deployment Tool templates."""
 from __future__ import annotations
 
-from trustpal.constants import OfficeTemplate
+from allinone_it_config.constants import OfficeTemplate
 
 
 def get_template(name: str, templates: dict[str, OfficeTemplate]) -> OfficeTemplate:

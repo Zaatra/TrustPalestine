@@ -34,10 +34,10 @@ jobs:
         run: |
           if (Test-Path dist) { Remove-Item dist -Recurse -Force }
           if (Test-Path build) { Remove-Item build -Recurse -Force }
-          python -m PyInstaller -y TrustPalestine.spec
+          python -m PyInstaller -y AllInOneITConfigTool.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TrustPalestine-windows
-          path: dist/TrustPalestine
+          name: AllInOneITConfigTool-windows
+          path: dist/AllInOneITConfigTool

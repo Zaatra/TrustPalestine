@@ -1,7 +1,7 @@
 [project]
-name = "trustpalestine"
+name = "all-in-one-it-config-tool"
 version = "0.1.0"
-description = "Python port of the Trust Palestine IT Configuration Tool"
+description = "Python port of the All-In-One IT Configuration Tool"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.6",

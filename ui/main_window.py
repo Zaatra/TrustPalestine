@@ -1,4 +1,4 @@
-"""Main window for the Trust Palestine configuration tool."""
+"""Main window for the All-In-One IT Configuration Tool."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from trustpal.app_registry import REGISTRY
-from trustpal.constants import IMMUTABLE_CONFIG
+from allinone_it_config.app_registry import REGISTRY
+from allinone_it_config.constants import IMMUTABLE_CONFIG
 from ui.install_tab import InstallTab
 from ui.drivers_tab import DriversTab
 from ui.system_tab import SystemTab
@@ -24,7 +24,7 @@ from ui.theme import apply_dark_theme
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Trust Palestine IT Configuration Tool")
+        self.setWindowTitle("All-In-One IT Configuration Tool")
         self.resize(1200, 800)
         apply_dark_theme()
         self._thread_pool = QThreadPool.globalInstance()

@@ -4,7 +4,7 @@ import subprocess
 from typing import Sequence
 
 from services.system_config import ConfigCheckResult, RegistryAccessor, SystemConfigService
-from trustpal.constants import IMMUTABLE_CONFIG
+from allinone_it_config.constants import IMMUTABLE_CONFIG
 
 
 class FakeRunner:

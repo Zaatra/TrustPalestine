@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from trustpal.constants import IMMUTABLE_CONFIG
+from allinone_it_config.constants import IMMUTABLE_CONFIG
 
 
 @dataclass(frozen=True)

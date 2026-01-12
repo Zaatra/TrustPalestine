@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from services.installer import IVMSDownloader, WingetClient, WingetError
-from trustpal.app_registry import AppEntry
+from allinone_it_config.app_registry import AppEntry
 
 try:  # Windows-only dependency, optional for non-Windows hosts
     import winreg  # type: ignore

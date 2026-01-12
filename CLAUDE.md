@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Trust Palestine IT Configuration Tool (v18.3)** is a Windows Forms GUI application for enterprise IT system management, packaged as a single PowerShell script (`TrustInstaller.ps1`, 2,660 lines). It provides automated software deployment, HP driver management, and system configuration for Windows workstations, with special support for legacy systems (Windows 7/8, PowerShell 2.0).
+**All-In-One IT Configuration Tool (v18.3)** is a Windows Forms GUI application for enterprise IT system management, packaged as a single PowerShell script (`AllInOneITConfigTool.ps1`, 2,660 lines). It provides automated software deployment, HP driver management, and system configuration for Windows workstations, with special support for legacy systems (Windows 7/8, PowerShell 2.0).
 
 **Key Features:**
 - 25+ application installations via WinGet, Office Deployment Tool, or local installers
@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Single-File Structure
 
-The entire application is contained in `TrustInstaller.ps1`, organized into 8 sections:
+The entire application is contained in `AllInOneITConfigTool.ps1`, organized into 8 sections:
 
 1. **Admin Privilege Elevation** (UAC check and elevation)
 2. **Global Configuration** (lines 36-164):
@@ -141,7 +141,7 @@ Driver grid columns (DataGridView):
 **Run Script:**
 ```powershell
 # From PowerShell
-powershell -ExecutionPolicy Bypass -File TrustInstaller.ps1
+powershell -ExecutionPolicy Bypass -File AllInOneITConfigTool.ps1
 
 # Or right-click → Run with PowerShell (auto-elevates)
 ```

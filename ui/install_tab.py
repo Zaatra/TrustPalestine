@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from services.app_status import AppStatusService, AppUpdateResult, InstalledInfo
 from services.installer import InstallerService, OperationResult
-from trustpal.app_registry import AppRegistry
+from allinone_it_config.app_registry import AppRegistry
 from ui.workers import ServiceWorker
 
 LogCallback = Callable[[str], None]

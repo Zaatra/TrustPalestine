@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
-from trustpal.constants import IMMUTABLE_CONFIG
+from allinone_it_config.constants import IMMUTABLE_CONFIG
 
 
 @dataclass
