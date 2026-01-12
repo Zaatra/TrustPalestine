@@ -81,7 +81,7 @@ class WingetClient:
         cmd = self._build_base_command("download", package_id, source, force)
         if version:
             cmd.extend(["--version", version])
-        cmd.extend(["-d", str(destination)])
+        cmd.extend(["--locale", "en-US", "--disable-interactivity", "--verbose", "-d", str(destination)])
         return self._run(cmd)
 
     def show_package_version(self, package_id: str, *, source: str | None = None) -> str | None:
@@ -117,7 +117,7 @@ class WingetClient:
         if not self._executable:
             raise WingetError("winget executable not found in PATH")
         cmd = [str(self._executable), verb, "--id", package_id, "--exact"]
-        if force:
+        if force and verb != "download":
             cmd.append("--force")
         cmd.extend(["--accept-package-agreements", "--accept-source-agreements"])
         if source:
@@ -635,6 +635,12 @@ class InstallerService:
                 continue
             stdout_parts.append(result.stdout)
             stderr_parts.append(result.stderr)
+            if not result.succeeded:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                success = False
+                error_msg = result.stderr.strip() or result.stdout.strip() or f"download failed (exit code {result.returncode})"
+                messages.append(f"{stem}: {error_msg}")
+                continue
             installer = self._find_downloaded_installer(temp_dir)
             if not installer:
                 shutil.rmtree(temp_dir, ignore_errors=True)
