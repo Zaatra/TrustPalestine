@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -72,6 +73,12 @@ class InstallTab(QWidget):
         button_row.addWidget(self._btn_select_all)
         button_row.addWidget(self._btn_select_none)
         layout.addLayout(button_row)
+
+        self._update_progress = QProgressBar(self)
+        self._update_progress.setVisible(False)
+        self._update_progress.setTextVisible(True)
+        self._update_progress.setFormat("Checking updates... %p%")
+        layout.addWidget(self._update_progress)
 
         self._table = QTableWidget(len(self._registry.entries), 7, self)
         self._table.setHorizontalHeaderLabels(
@@ -148,6 +155,7 @@ class InstallTab(QWidget):
             self._log(f"[{status}] {action} :: {result.app.name} -> {result.message}")
         self._busy = False
         self._set_buttons_enabled(True)
+        self._update_progress.setVisible(False)
         if action == "install_selected":
             self._start_installed_scan()
 
@@ -155,6 +163,7 @@ class InstallTab(QWidget):
         self._log(f"[ERROR] {message}")
         self._busy = False
         self._set_buttons_enabled(True)
+        self._update_progress.setVisible(False)
 
     def _selected_apps(self) -> list[str]:
         selection: list[str] = []
@@ -208,14 +217,21 @@ class InstallTab(QWidget):
         self._busy = True
         self._set_buttons_enabled(False)
         self._log("Checking latest application versions...")
+        total = self._table.rowCount()
+        self._update_progress.setRange(0, total)
+        self._update_progress.setValue(0)
+        self._update_progress.setFormat("Checking updates... %v/%m (%p%)")
+        self._update_progress.setVisible(True)
         for row in range(self._table.rowCount()):
             self._set_item_text(row, self.COL_LATEST, "Checking...")
             self._set_item_text(row, self.COL_STATUS, "Checking")
             self._apply_status_color(row, "checking")
         installed_map = dict(self._installed_map) or None
         worker = ServiceWorker(self._status_service.check_updates, installed_map)
+        worker.kwargs["progress_callback"] = worker.signals.progress.emit
         worker.signals.finished.connect(self._handle_update_results)
         worker.signals.error.connect(self._handle_error)
+        worker.signals.progress.connect(self._handle_update_progress)
         self._thread_pool.start(worker)
 
     def _handle_update_results(self, results: Iterable[AppUpdateResult]) -> None:
@@ -229,6 +245,12 @@ class InstallTab(QWidget):
             self._apply_status_color(row, result.status_level)
         self._busy = False
         self._set_buttons_enabled(True)
+        self._update_progress.setVisible(False)
+
+    def _handle_update_progress(self, current: int, total: int, app_name: str) -> None:
+        if total > 0:
+            self._update_progress.setRange(0, total)
+        self._update_progress.setValue(current)
 
     def _set_item_text(self, row: int, column: int, text: str) -> None:
         item = self._table.item(row, column)

@@ -8,6 +8,7 @@ class WorkerSignals(QObject):
     finished = Signal(object)
     error = Signal(str)
     message = Signal(str)
+    progress = Signal(int, int, str)
 
 
 class ServiceWorker(QRunnable):

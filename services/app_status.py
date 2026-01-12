@@ -6,7 +6,7 @@ import sys
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from services.installer import IVMSDownloader, WingetClient, WingetError
 from allinone_it_config.app_registry import AppEntry
@@ -29,7 +29,7 @@ _LEVEL_UP_TO_DATE = "up_to_date"
 _LEVEL_UPDATE_AVAILABLE = "update_available"
 _LEVEL_UNKNOWN = "unknown"
 
-_LATEST_UNKNOWN = {"", "N/A", "Error", "Winget Missing"}
+_LATEST_UNKNOWN = {"", "N/A", "Error", "Winget Missing", "Unknown"}
 
 
 @dataclass(frozen=True)
@@ -132,11 +132,23 @@ class AppStatusService:
                 )
         return results
 
-    def check_updates(self, installed_map: Mapping[str, InstalledInfo] | None = None) -> list[AppUpdateResult]:
+    def check_updates(
+        self,
+        installed_map: Mapping[str, InstalledInfo] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> list[AppUpdateResult]:
         if installed_map is None:
             installed_map = {info.app.name: info for info in self.scan_installed()}
+        if self._winget.is_available():
+            try:
+                self._winget.update_sources("winget")
+                if any(app.source == "msstore" for app in self._apps):
+                    self._winget.update_sources("msstore")
+            except Exception:
+                pass
         results: list[AppUpdateResult] = []
-        for app in self._apps:
+        total = len(self._apps)
+        for index, app in enumerate(self._apps, start=1):
             info = installed_map.get(app.name)
             if info is None:
                 info = InstalledInfo(
@@ -159,6 +171,8 @@ class AppStatusService:
                     status_level=level,
                 )
             )
+            if progress_callback:
+                progress_callback(index, total, app.name)
         return results
 
     def _read_uninstall_entries(self) -> list[_UninstallEntry]:
@@ -249,9 +263,9 @@ class AppStatusService:
                 continue
             name = entry.display_name
             arch = None
-            if re.search(r"\(x64\)|64-bit", name, re.IGNORECASE):
+            if re.search(r"\b(x64|64-bit|amd64)\b", name, re.IGNORECASE):
                 arch = "x64"
-            elif re.search(r"\(x86\)|32-bit|x32", name, re.IGNORECASE):
+            elif re.search(r"\b(x86|32-bit|x32)\b", name, re.IGNORECASE):
                 arch = "x86"
             elif vc_key == "2005":
                 arch = "x86"
@@ -279,6 +293,10 @@ class AppStatusService:
                 "https://learn.microsoft.com/en-us/officeupdates/update-history-microsoft365-apps-by-date"
             )
         if app.name == "HP Support Asst":
+            if app.winget_id:
+                winget_version = self._get_winget_latest(app.winget_id, app.source)
+                if not self._latest_unknown(winget_version) and winget_version != "N/A":
+                    return winget_version
             return self._get_hp_support_latest()
         if app.name in self._direct_downloaders:
             return self._get_direct_latest(app.name)
@@ -291,6 +309,7 @@ class AppStatusService:
     def _get_winget_latest(self, package_id: str, source: str | None) -> str:
         if not self._winget.is_available():
             return "Winget Missing"
+        source = source or "winget"
         try:
             version = self._winget.show_package_version(package_id, source=source)
         except WingetError:

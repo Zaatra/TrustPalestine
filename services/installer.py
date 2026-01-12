@@ -1,6 +1,7 @@
 """Application installation orchestration."""
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
@@ -39,6 +40,9 @@ class WingetClient:
 
     def __init__(self, executable: str | None = None):
         exe_path = executable or shutil.which("winget")
+        if not exe_path:
+            fallback = self._find_winget_fallback()
+            exe_path = str(fallback) if fallback else None
         self._executable = Path(exe_path) if exe_path else None
 
     def is_available(self) -> bool:
@@ -88,6 +92,14 @@ class WingetClient:
                 return match.group(1).strip()
         return None
 
+    def update_sources(self, name: str | None = None) -> CommandExecutionResult | None:
+        if not self._executable:
+            return None
+        cmd = [str(self._executable), "source", "update"]
+        if name:
+            cmd.extend(["--name", name])
+        return self._run(cmd)
+
     def _build_base_command(
         self,
         verb: str,
@@ -108,6 +120,24 @@ class WingetClient:
     def _run(self, cmd: list[str]) -> CommandExecutionResult:
         completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return CommandExecutionResult(cmd, completed.returncode, completed.stdout, completed.stderr)
+
+    def _find_winget_fallback(self) -> Path | None:
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            candidate = Path(local_appdata) / "Microsoft" / "WindowsApps" / "winget.exe"
+            if candidate.exists():
+                return candidate
+        program_files = os.environ.get("ProgramFiles")
+        if program_files:
+            base = Path(program_files) / "WindowsApps"
+            try:
+                candidates = base.glob("Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe/winget.exe")
+            except OSError:
+                candidates = []
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+        return None
 
 
 class OfficeInstaller:
