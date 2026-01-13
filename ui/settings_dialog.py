@@ -45,12 +45,12 @@ class SettingsDialog(QDialog):
         form.addRow(self._crowdstrike_cid_label, self._crowdstrike_cid)
 
         self._crowdstrike_url = QLineEdit(self._settings.crowdstrike_download_url)
-        self._crowdstrike_url.setPlaceholderText("SharePoint link (https://...sharepoint...)")
+        self._crowdstrike_url.setPlaceholderText("SharePoint link (..sharepoint...)")
         self._crowdstrike_url_label = QLabel("CrowdStrike SharePoint URL")
         form.addRow(self._crowdstrike_url_label, self._crowdstrike_url)
 
         self._forticlient_url = QLineEdit(self._settings.forticlient_download_url)
-        self._forticlient_url.setPlaceholderText("SharePoint link (https://...sharepoint...)")
+        self._forticlient_url.setPlaceholderText("SharePoint link (..sharepoint...)")
         self._forticlient_url_label = QLabel("FortiClient VPN SharePoint URL")
         form.addRow(self._forticlient_url_label, self._forticlient_url)
 

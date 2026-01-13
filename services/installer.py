@@ -1,6 +1,7 @@
 """Application installation orchestration."""
 from __future__ import annotations
 
+import http.cookiejar
 import os
 import re
 import shlex
@@ -949,9 +950,18 @@ def _download_file_with_final_url(
     status_callback: Callable[[str], None] | None = None,
     label: str | None = None,
 ) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as handle:
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    with opener.open(request, timeout=60) as response, destination.open("wb") as handle:
         final_url = response.geturl()
         last_time = time.monotonic()
         last_bytes = 0
@@ -983,7 +993,59 @@ def _is_sharepoint_url(url: str) -> bool:
 
 
 def _sharepoint_download_url(url: str) -> str:
-    return f"{url}&download=1" if "?" in url else f"{url}?download=1"
+    cleaned = url.strip()
+    parsed = urllib.parse.urlsplit(cleaned)
+    if not parsed.scheme or not parsed.netloc:
+        return f"{cleaned}&download=1" if "?" in cleaned else f"{cleaned}?download=1"
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query = [(key, value) for key, value in query if key.lower() != "download"]
+    query.append(("download", "1"))
+    new_query = urllib.parse.urlencode(query)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+
+
+def _download_file_with_requests(
+    url: str,
+    destination: Path,
+    *,
+    status_callback: Callable[[str], None] | None = None,
+    label: str | None = None,
+    timeout: float = 120.0,
+) -> None:
+    try:
+        import requests
+    except ImportError as exc:
+        raise RuntimeError("SharePoint downloads require the requests package (pip install requests).") from exc
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with requests.get(
+        url,
+        headers=headers,
+        stream=True,
+        allow_redirects=True,
+        timeout=timeout,
+    ) as response:
+        response.raise_for_status()
+        last_time = time.monotonic()
+        last_bytes = 0
+        downloaded = 0
+        with destination.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                if status_callback and now - last_time >= 1.0:
+                    delta_bytes = downloaded - last_bytes
+                    speed = delta_bytes / max(now - last_time, 0.001)
+                    status_callback(_format_speed_label(label or "Downloading", speed))
+                    last_time = now
+                    last_bytes = downloaded
 
 
 def _file_has_exe_header(path: Path) -> bool:
@@ -1020,7 +1082,7 @@ def _download_sharepoint_exe(
     except OSError:
         pass
     download_url = _sharepoint_download_url(share_url)
-    _download_file_with_final_url(
+    _download_file_with_requests(
         download_url,
         temp_path,
         status_callback=status_callback,
