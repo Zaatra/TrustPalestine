@@ -19,6 +19,7 @@ def default_settings_path() -> Path:
 class UserSettings:
     crowdstrike_cid: str = ""
     crowdstrike_download_url: str = ""
+    forticlient_download_url: str = ""
     office_2024_xml_path: str = ""
     office_365_xml_path: str = ""
     odt_setup_path: str = ""
@@ -36,6 +37,7 @@ class UserSettings:
         return {
             "crowdstrike_cid": self.crowdstrike_cid,
             "crowdstrike_download_url": self.crowdstrike_download_url,
+            "forticlient_download_url": self.forticlient_download_url,
             "office_2024_xml_path": self.office_2024_xml_path,
             "office_365_xml_path": self.office_365_xml_path,
             "odt_setup_path": self.odt_setup_path,
@@ -59,6 +61,7 @@ class UserSettings:
         return cls(
             crowdstrike_cid=_get("crowdstrike_cid"),
             crowdstrike_download_url=_get("crowdstrike_download_url"),
+            forticlient_download_url=_get("forticlient_download_url"),
             office_2024_xml_path=_get("office_2024_xml_path"),
             office_365_xml_path=_get("office_365_xml_path"),
             odt_setup_path=_get("odt_setup_path"),

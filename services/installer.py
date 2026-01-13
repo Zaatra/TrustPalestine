@@ -474,6 +474,11 @@ class InstallerService:
                 self._settings.crowdstrike_download_url.strip(),
                 default_filename="crowdstrike_falcon_sensor.exe",
             )
+        if self._settings.forticlient_download_url.strip():
+            self._direct_downloaders["FortiClient VPN"] = ConfiguredUrlDownloader(
+                self._settings.forticlient_download_url.strip(),
+                default_filename="forticlient_vpn.exe",
+            )
         if direct_downloaders:
             self._direct_downloaders.update(direct_downloaders)
 
@@ -828,6 +833,25 @@ class InstallerService:
         filename = info.filename or f"{stem}_{version}.exe"
         destination_dir = self._downloads_dir / _safe_name(app.name)
         destination_dir.mkdir(parents=True, exist_ok=True)
+        if app.name in {"CrowdStrike Falcon Sensor", "FortiClient VPN"}:
+            if not _is_sharepoint_url(info.url):
+                return OperationResult(app, "download", False, f"{app.name} download URL must be a SharePoint link")
+            dest_path = destination_dir / filename
+            already_present = dest_path.exists() and _file_has_exe_header(dest_path)
+            try:
+                dest_path = _download_sharepoint_exe(
+                    info.url,
+                    destination_dir,
+                    filename,
+                    status_callback=status_callback,
+                    label=app.name,
+                    force=False,
+                )
+            except Exception as exc:
+                return OperationResult(app, "download", False, f"Download error: {exc}")
+            if already_present:
+                return OperationResult(app, "download", True, f"Installer already present: {dest_path.name}")
+            return OperationResult(app, "download", True, f"Downloaded {dest_path.name}")
         dest_path = destination_dir / filename
         if dest_path.exists():
             return OperationResult(app, "download", True, f"Installer already present: {dest_path.name}")
@@ -903,25 +927,7 @@ class InstallerService:
         status_callback: Callable[[str], None] | None = None,
         label: str | None = None,
     ) -> None:
-        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as handle:
-            last_time = time.monotonic()
-            last_bytes = 0
-            downloaded = 0
-            while True:
-                chunk = response.read(256 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                downloaded += len(chunk)
-                now = time.monotonic()
-                if status_callback and now - last_time >= 1.0:
-                    delta_bytes = downloaded - last_bytes
-                    speed = delta_bytes / max(now - last_time, 0.001)
-                    status_callback(_format_speed_label(label or "Downloading", speed))
-                    last_time = now
-                    last_bytes = downloaded
+        _download_file_with_final_url(url, destination, status_callback=status_callback, label=label)
 
     def _apply_post_install_steps(self, app: AppEntry, result: OperationResult) -> OperationResult:
         if not result.success:
@@ -934,6 +940,118 @@ class InstallerService:
             return OperationResult(app, result.operation, True, message, result.stdout, result.stderr)
         message = f"{result.message}; {license_result.message}" if license_result.message else "WinRAR license copy failed"
         return OperationResult(app, result.operation, False, message, result.stdout, result.stderr)
+
+
+def _download_file_with_final_url(
+    url: str,
+    destination: Path,
+    *,
+    status_callback: Callable[[str], None] | None = None,
+    label: str | None = None,
+) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as handle:
+        final_url = response.geturl()
+        last_time = time.monotonic()
+        last_bytes = 0
+        downloaded = 0
+        while True:
+            chunk = response.read(256 * 1024)
+            if not chunk:
+                break
+            handle.write(chunk)
+            downloaded += len(chunk)
+            now = time.monotonic()
+            if status_callback and now - last_time >= 1.0:
+                delta_bytes = downloaded - last_bytes
+                speed = delta_bytes / max(now - last_time, 0.001)
+                status_callback(_format_speed_label(label or "Downloading", speed))
+                last_time = now
+                last_bytes = downloaded
+    return final_url
+
+
+def _is_sharepoint_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = parsed.netloc.lower()
+    if not host:
+        return False
+    return host.endswith("sharepoint.com") or ".sharepoint." in host or host.startswith("sharepoint.")
+
+
+def _sharepoint_download_url(url: str) -> str:
+    return f"{url}&download=1" if "?" in url else f"{url}?download=1"
+
+
+def _extract_sharepoint_guid(url: str) -> str | None:
+    match = re.search(r"sourcedoc=%7B([0-9a-fA-F-]{36})%7D", url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _file_has_exe_header(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(2)
+    except OSError:
+        return False
+    return len(header) == 2 and header[0] == 0x4D and header[1] == 0x5A
+
+
+def _download_sharepoint_exe(
+    share_url: str,
+    destination_dir: Path,
+    filename: str,
+    *,
+    status_callback: Callable[[str], None] | None = None,
+    label: str | None = None,
+    force: bool = False,
+) -> Path:
+    share_url = share_url.strip()
+    if not share_url:
+        raise RuntimeError("SharePoint download URL not configured")
+    if not _is_sharepoint_url(share_url):
+        raise RuntimeError("Download URL is not a SharePoint link")
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = destination_dir / filename
+    if not force and dest_path.exists() and _file_has_exe_header(dest_path):
+        return dest_path
+    temp_path = destination_dir / f".{filename}.download"
+    try:
+        if temp_path.exists():
+            temp_path.unlink()
+    except OSError:
+        pass
+    download_url = _sharepoint_download_url(share_url)
+    final_url = _download_file_with_final_url(
+        download_url,
+        temp_path,
+        status_callback=status_callback,
+        label=label,
+    )
+    if _file_has_exe_header(temp_path):
+        temp_path.replace(dest_path)
+        return dest_path
+    guid = _extract_sharepoint_guid(final_url)
+    if guid:
+        parsed = urllib.parse.urlparse(share_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        direct_url = f"{base}/_layouts/15/download.aspx?UniqueId={guid}"
+        _download_file_with_final_url(direct_url, temp_path, status_callback=status_callback, label=label)
+        if _file_has_exe_header(temp_path):
+            temp_path.replace(dest_path)
+            return dest_path
+    try:
+        temp_path.unlink()
+    except OSError:
+        pass
+    raise RuntimeError(
+        "Download did not return an EXE (got HTML/redirect). Share link may not be truly anonymous or tenant blocks direct download."
+    )
 
 
 def _normalize_version_string(value: str | None) -> str | None:

@@ -45,8 +45,14 @@ class SettingsDialog(QDialog):
         form.addRow(self._crowdstrike_cid_label, self._crowdstrike_cid)
 
         self._crowdstrike_url = QLineEdit(self._settings.crowdstrike_download_url)
-        self._crowdstrike_url_label = QLabel("CrowdStrike Download URL")
+        self._crowdstrike_url.setPlaceholderText("SharePoint link (https://...sharepoint...)")
+        self._crowdstrike_url_label = QLabel("CrowdStrike SharePoint URL")
         form.addRow(self._crowdstrike_url_label, self._crowdstrike_url)
+
+        self._forticlient_url = QLineEdit(self._settings.forticlient_download_url)
+        self._forticlient_url.setPlaceholderText("SharePoint link (https://...sharepoint...)")
+        self._forticlient_url_label = QLabel("FortiClient VPN SharePoint URL")
+        form.addRow(self._forticlient_url_label, self._forticlient_url)
 
         self._office_2024_path = QLineEdit(self._settings.office_2024_xml_path)
         self._office_2024_label = QLabel("Office 2024 XML")
@@ -162,6 +168,7 @@ class SettingsDialog(QDialog):
         self._teamviewer_args.textChanged.connect(self._update_validation)
         self._crowdstrike_cid.textChanged.connect(self._update_validation)
         self._crowdstrike_url.textChanged.connect(self._update_validation)
+        self._forticlient_url.textChanged.connect(self._update_validation)
         self._office_2024_path.textChanged.connect(self._update_validation)
         self._office_365_path.textChanged.connect(self._update_validation)
         self._odt_setup_path.textChanged.connect(self._update_validation)
@@ -212,6 +219,7 @@ class SettingsDialog(QDialog):
             cid_value = cid_value[4:].strip()
         self._settings.crowdstrike_cid = cid_value
         self._settings.crowdstrike_download_url = self._crowdstrike_url.text().strip()
+        self._settings.forticlient_download_url = self._forticlient_url.text().strip()
         self._settings.office_2024_xml_path = self._office_2024_path.text().strip()
         self._settings.office_365_xml_path = self._office_365_path.text().strip()
         self._settings.odt_setup_path = self._odt_setup_path.text().strip()
@@ -294,7 +302,11 @@ class SettingsDialog(QDialog):
         self._set_label_valid(self._crowdstrike_cid_label, self._is_crowdstrike_cid_valid())
         self._set_label_valid(
             self._crowdstrike_url_label,
-            self._is_url_valid(self._crowdstrike_url.text(), allow_empty=True),
+            self._is_sharepoint_url_valid(self._crowdstrike_url.text(), allow_empty=True),
+        )
+        self._set_label_valid(
+            self._forticlient_url_label,
+            self._is_sharepoint_url_valid(self._forticlient_url.text(), allow_empty=True),
         )
         self._set_label_valid(self._office_2024_label, self._is_file_valid(self._office_2024_path.text(), suffixes=(".xml",)))
         self._set_label_valid(self._office_365_label, self._is_file_valid(self._office_365_path.text(), suffixes=(".xml",)))
@@ -357,6 +369,16 @@ class SettingsDialog(QDialog):
             return allow_empty
         parsed = urlparse(cleaned)
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _is_sharepoint_url_valid(self, value: str, *, allow_empty: bool = False) -> bool:
+        cleaned = value.strip()
+        if not cleaned:
+            return allow_empty
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        host = parsed.netloc.lower()
+        return host.endswith("sharepoint.com") or ".sharepoint." in host or host.startswith("sharepoint.")
 
     def _is_crowdstrike_cid_valid(self) -> bool:
         cid_value = self._crowdstrike_cid.text().strip()

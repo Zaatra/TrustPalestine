@@ -49,6 +49,7 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
         crowdstrike_cid = crowdstrike_cid[4:].strip()
     crowdstrike_args = f"/install /quiet /norestart CID={crowdstrike_cid}" if crowdstrike_cid else ""
     crowdstrike_mode = "direct" if settings.crowdstrike_download_url.strip() else "localonly"
+    forticlient_mode = "direct" if settings.forticlient_download_url.strip() else "winget"
     teamviewer_mode = settings.teamviewer_install_mode.strip().lower()
     teamviewer_use_msi = teamviewer_mode == "msi"
     teamviewer_args = settings.teamviewer_args.strip()
@@ -252,7 +253,7 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
             AppEntry(
                 category="Security & VMS",
                 name="FortiClient VPN",
-                download_mode="winget",
+                download_mode=forticlient_mode,
                 winget_id="Fortinet.FortiClientVPN",
                 detection_pattern="FortiClient VPN",
                 file_stem="forticlient_vpn",

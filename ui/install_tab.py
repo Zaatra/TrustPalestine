@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Callable, Iterable
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QColor
@@ -280,8 +281,12 @@ class InstallTab(QWidget):
         if "crowdstrike falcon sensor".lower() in selected:
             if not self._settings.crowdstrike_cid.strip():
                 missing.append("CrowdStrike CID")
-            if action == "download_selected" and not self._settings.crowdstrike_download_url.strip():
-                missing.append("CrowdStrike download URL")
+            if action == "download_selected":
+                if not _is_sharepoint_url(self._settings.crowdstrike_download_url):
+                    missing.append("CrowdStrike SharePoint URL")
+        if "forticlient vpn".lower() in selected and action == "download_selected":
+            if not _is_sharepoint_url(self._settings.forticlient_download_url):
+                missing.append("FortiClient VPN SharePoint URL")
         if action == "install_selected":
             if "office 2024 ltsc".lower() in selected:
                 if not _file_exists(self._settings.office_2024_xml_path):
@@ -539,3 +544,14 @@ def _format_elapsed(total_seconds: int) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _is_sharepoint_url(value: str) -> bool:
+    cleaned = value.strip()
+    if not cleaned:
+        return False
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    host = parsed.netloc.lower()
+    return host.endswith("sharepoint.com") or ".sharepoint." in host or host.startswith("sharepoint.")

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
-from services.installer import HPSADownloader, IVMSDownloader, WingetClient, WingetError
+from services.installer import HPSADownloader, IVMSDownloader, WingetClient, WingetError, _download_sharepoint_exe, _is_sharepoint_url
 from allinone_it_config.app_registry import AppEntry
 from allinone_it_config.paths import get_application_directory
 from allinone_it_config.user_settings import UserSettings
@@ -455,6 +455,10 @@ class AppStatusService:
             return self._get_office_latest(
                 "https://learn.microsoft.com/en-us/officeupdates/update-history-microsoft365-apps-by-date"
             )
+        if app.name == "CrowdStrike Falcon Sensor":
+            return self._get_crowdstrike_latest(app)
+        if app.name == "FortiClient VPN":
+            return self._get_forticlient_latest(app)
         if app.name == "HP Support Asst":
             if app.name in self._direct_downloaders:
                 return self._get_direct_latest(app.name)
@@ -470,6 +474,42 @@ class AppStatusService:
         if app.winget_id:
             return self._get_winget_latest(app.winget_id, app.source)
         return "N/A"
+
+    def _get_crowdstrike_latest(self, app: AppEntry) -> str:
+        share_url = self._settings.crowdstrike_download_url.strip()
+        if not share_url:
+            return "N/A"
+        if not _is_sharepoint_url(share_url):
+            return "Error"
+        stem = app.file_stem or _safe_name(app.name)
+        filename = f"{stem}.exe"
+        destination_dir = self._working_dir / "downloads" / _safe_name(app.name)
+        try:
+            dest_path = _download_sharepoint_exe(share_url, destination_dir, filename, force=True)
+        except Exception:
+            return "Error"
+        version = _get_file_version(dest_path)
+        if not version:
+            return "Unknown"
+        return _normalize_version(version) or version
+
+    def _get_forticlient_latest(self, app: AppEntry) -> str:
+        share_url = self._settings.forticlient_download_url.strip()
+        if not share_url:
+            return "N/A"
+        if not _is_sharepoint_url(share_url):
+            return "Error"
+        stem = app.file_stem or _safe_name(app.name)
+        filename = f"{stem}.exe"
+        destination_dir = self._working_dir / "downloads" / _safe_name(app.name)
+        try:
+            dest_path = _download_sharepoint_exe(share_url, destination_dir, filename, force=True)
+        except Exception:
+            return "Error"
+        version = _get_file_version(dest_path)
+        if not version:
+            return "Unknown"
+        return _normalize_version(version) or version
 
     def _get_winget_latest(self, package_id: str, source: str | None) -> str:
         if not self._winget.is_available():
@@ -640,6 +680,10 @@ def _parse_dual_text(text: str) -> tuple[str | None, str | None]:
     if text and text not in _LATEST_UNKNOWN:
         return text, text
     return None, None
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]+", "_", name).lower()
 
 
 def _office_installed_build(installed_text: str) -> str | None:
