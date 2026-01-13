@@ -83,12 +83,14 @@ class InstallTab(QWidget):
         self._btn_download = QPushButton("Download Offline")
         self._btn_install = QPushButton("Install Selected")
         self._btn_check_updates = QPushButton("Check for Updates")
+        self._btn_refresh_offline = QPushButton("Refresh Offline")
         self._btn_settings = QPushButton("Settings")
         self._btn_select_all = QPushButton("Select All")
         self._btn_select_none = QPushButton("Select None")
         button_row.addWidget(self._btn_download)
         button_row.addWidget(self._btn_install)
         button_row.addWidget(self._btn_check_updates)
+        button_row.addWidget(self._btn_refresh_offline)
         button_row.addWidget(self._btn_settings)
         button_row.addStretch()
         button_row.addWidget(self._btn_select_all)
@@ -122,10 +124,14 @@ class InstallTab(QWidget):
         header.setSectionResizeMode(self.COL_CATEGORY, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COL_APP, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(self.COL_INSTALLED, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(self.COL_LATEST, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(self.COL_OFFLINE, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(self.COL_MODE, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COL_LATEST, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(self.COL_OFFLINE, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(self.COL_MODE, QHeaderView.ResizeMode.Interactive)
+        self._table.setColumnWidth(self.COL_LATEST, 110)
+        self._table.setColumnWidth(self.COL_STATUS, 150)
+        self._table.setColumnWidth(self.COL_OFFLINE, 150)
+        self._table.setColumnWidth(self.COL_MODE, 130)
         layout.addWidget(self._table)
 
         self._populate_table()
@@ -133,6 +139,7 @@ class InstallTab(QWidget):
         self._btn_download.clicked.connect(lambda: self._start_action("download_selected"))
         self._btn_install.clicked.connect(lambda: self._start_action("install_selected"))
         self._btn_check_updates.clicked.connect(self._start_update_check)
+        self._btn_refresh_offline.clicked.connect(self._refresh_offline_status_clicked)
         self._btn_select_all.clicked.connect(self._select_all)
         self._btn_select_none.clicked.connect(self._select_none)
         self._btn_settings.clicked.connect(self._open_settings_dialog)
@@ -318,6 +325,7 @@ class InstallTab(QWidget):
             self._btn_download,
             self._btn_install,
             self._btn_check_updates,
+            self._btn_refresh_offline,
             self._btn_settings,
             self._btn_select_all,
             self._btn_select_none,
@@ -348,6 +356,12 @@ class InstallTab(QWidget):
             self._apply_status_color(row, level)
         self._busy = False
         self._set_buttons_enabled(True)
+
+    def _refresh_offline_status_clicked(self) -> None:
+        if self._busy:
+            QMessageBox.information(self, "In Progress", "Please wait for the current operation to complete.")
+            return
+        self._refresh_offline_status()
 
     def _refresh_offline_status(self) -> None:
         for app in self._registry.entries:
