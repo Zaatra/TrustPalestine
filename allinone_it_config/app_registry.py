@@ -58,7 +58,6 @@ def build_registry(settings: UserSettings | None = None) -> AppRegistry:
     teamviewer_installer_path = None
     if teamviewer_use_msi:
         teamviewer_download_mode = "localonly"
-        teamviewer_winget_id = None
         teamviewer_file_stem = None
         teamviewer_installer_path = settings.teamviewer_msi_path.strip() or None
         parts = ["/qn", "/norestart"]

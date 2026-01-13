@@ -94,7 +94,8 @@ class SettingsDialog(QDialog):
         form.addRow("TeamViewer Install Mode", self._teamviewer_mode)
 
         self._teamviewer_args = QLineEdit(self._settings.teamviewer_args)
-        form.addRow("TeamViewer Host Args", self._teamviewer_args)
+        self._teamviewer_args_label = QLabel("TeamViewer Host Args")
+        form.addRow(self._teamviewer_args_label, self._teamviewer_args)
 
         self._teamviewer_msi_path = QLineEdit(self._settings.teamviewer_msi_path)
         self._teamviewer_msi_row = self._make_path_picker(
@@ -133,8 +134,11 @@ class SettingsDialog(QDialog):
         self._teamviewer_customconfig.textChanged.connect(self._update_teamviewer_msi_args)
         self._teamviewer_assignment.textChanged.connect(self._update_teamviewer_msi_args)
         self._teamviewer_settings_file.textChanged.connect(self._update_teamviewer_msi_args)
+        self._teamviewer_msi_path.textChanged.connect(self._update_teamviewer_args_label)
+        self._teamviewer_args.textChanged.connect(self._update_teamviewer_args_label)
         self._update_teamviewer_msi_args()
         self._update_teamviewer_mode_ui()
+        self._update_teamviewer_args_label()
 
     def _make_path_picker(self, field: QLineEdit, title: str, filter_text: str) -> QWidget:
         container = QWidget()
@@ -188,21 +192,7 @@ class SettingsDialog(QDialog):
         teamviewer_assignment = self._teamviewer_assignment.text().strip()
         teamviewer_settings_file = self._teamviewer_settings_file.text().strip()
         if teamviewer_mode == "msi":
-            missing = []
-            if not teamviewer_msi_path:
-                missing.append("TeamViewer MSI path")
-            elif not Path(teamviewer_msi_path).is_file():
-                missing.append("TeamViewer MSI file not found")
-            if not teamviewer_customconfig:
-                missing.append("TeamViewer CUSTOMCONFIGID")
-            if not teamviewer_assignment:
-                missing.append("TeamViewer ASSIGNMENTID")
-            if not teamviewer_settings_file:
-                missing.append("TeamViewer SETTINGSFILE")
-            elif not teamviewer_settings_file.lower().endswith(".tvopt"):
-                missing.append("TeamViewer SETTINGSFILE must end with .tvopt")
-            elif not Path(teamviewer_settings_file).is_file():
-                missing.append("TeamViewer SETTINGSFILE not found")
+            missing = self._teamviewer_msi_issues()
             if missing:
                 message = "TeamViewer MSI settings missing:\n" + "\n".join(f"- {item}" for item in missing)
                 QMessageBox.warning(self, "Settings Required", message)
@@ -227,6 +217,7 @@ class SettingsDialog(QDialog):
             self._teamviewer_msi_args,
         ):
             widget.setEnabled(use_msi)
+        self._update_teamviewer_args_label()
 
     def _update_teamviewer_msi_args(self) -> None:
         parts = ["/qn", "/norestart"]
@@ -242,6 +233,38 @@ class SettingsDialog(QDialog):
                 settings_file = f'\"{settings_file}\"'
             parts.append(f"SETTINGSFILE={settings_file}")
         self._teamviewer_msi_args.setText(" ".join(parts))
+        self._update_teamviewer_args_label()
+
+    def _teamviewer_msi_issues(self) -> list[str]:
+        missing: list[str] = []
+        teamviewer_msi_path = self._teamviewer_msi_path.text().strip()
+        teamviewer_customconfig = self._teamviewer_customconfig.text().strip()
+        teamviewer_assignment = self._teamviewer_assignment.text().strip()
+        teamviewer_settings_file = self._teamviewer_settings_file.text().strip()
+        if not teamviewer_msi_path:
+            missing.append("TeamViewer MSI path")
+        elif not Path(teamviewer_msi_path).is_file():
+            missing.append("TeamViewer MSI file not found")
+        if not teamviewer_customconfig:
+            missing.append("TeamViewer CUSTOMCONFIGID")
+        if not teamviewer_assignment:
+            missing.append("TeamViewer ASSIGNMENTID")
+        if not teamviewer_settings_file:
+            missing.append("TeamViewer SETTINGSFILE")
+        elif not teamviewer_settings_file.lower().endswith(".tvopt"):
+            missing.append("TeamViewer SETTINGSFILE must end with .tvopt")
+        elif not Path(teamviewer_settings_file).is_file():
+            missing.append("TeamViewer SETTINGSFILE not found")
+        return missing
+
+    def _update_teamviewer_args_label(self) -> None:
+        use_msi = self._teamviewer_mode.currentData() == "msi"
+        if use_msi:
+            valid = not self._teamviewer_msi_issues()
+        else:
+            valid = True
+        color = "#4caf50" if valid else "#f44336"
+        self._teamviewer_args_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def _list_java_versions(self) -> None:
         exe = shutil.which("winget")
