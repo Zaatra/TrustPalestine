@@ -1071,6 +1071,39 @@ def _file_has_exe_header(path: Path) -> bool:
     return len(header) == 2 and header[0] == 0x4D and header[1] == 0x5A
 
 
+def _contains_permission_error(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, PermissionError):
+            return True
+    cause = exc.__cause__ or exc.__context__
+    if cause and cause is not exc:
+        return _contains_permission_error(cause)
+    return False
+
+
+def _pick_sharepoint_temp_path(
+    destination_dir: Path,
+    filename: str,
+    *,
+    status_callback: Callable[[str], None] | None = None,
+) -> Path:
+    temp_path = destination_dir / f".{filename}.download"
+    if not temp_path.exists():
+        return temp_path
+    try:
+        temp_path.unlink()
+        time.sleep(0.25)
+        return temp_path
+    except OSError:
+        suffix = f"{int(time.time())}-{os.getpid()}"
+        fallback = destination_dir / f".{filename}.{suffix}.download"
+        if status_callback:
+            status_callback(f"[DEBUG] sharepoint_temp_locked path={temp_path} fallback={fallback}")
+        return fallback
+
+
 def _download_sharepoint_exe(
     share_url: str,
     destination_dir: Path,
@@ -1089,21 +1122,35 @@ def _download_sharepoint_exe(
     dest_path = destination_dir / filename
     if not force and dest_path.exists() and _file_has_exe_header(dest_path):
         return dest_path
-    temp_path = destination_dir / f".{filename}.download"
-    try:
-        if temp_path.exists():
-            temp_path.unlink()
-    except OSError:
-        pass
+    temp_path = _pick_sharepoint_temp_path(destination_dir, filename, status_callback=status_callback)
     download_url = _sharepoint_download_url(share_url)
     if status_callback:
         status_callback(f"[DEBUG] sharepoint_download url={download_url} temp_path={temp_path}")
-    _download_file_with_requests(
-        download_url,
-        temp_path,
-        status_callback=status_callback,
-        label=label,
-    )
+    for attempt in range(1, 4):
+        try:
+            _download_file_with_requests(
+                download_url,
+                temp_path,
+                status_callback=status_callback,
+                label=label,
+            )
+            break
+        except Exception as exc:
+            if not _contains_permission_error(exc):
+                raise
+            if attempt >= 3:
+                raise
+            if status_callback:
+                status_callback(
+                    f"[DEBUG] sharepoint_download_permission_denied attempt={attempt} path={temp_path}"
+                )
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except OSError:
+                pass
+            time.sleep(0.5 * attempt)
+            temp_path = _pick_sharepoint_temp_path(destination_dir, filename, status_callback=status_callback)
     if _file_has_exe_header(temp_path):
         temp_path.replace(dest_path)
         return dest_path
