@@ -634,6 +634,8 @@ class InstallerService:
             try:
                 result = self._office.download(app.name, status_callback=status_callback)
                 message = "Office download completed" if result.succeeded else "Office download failed"
+                if result.succeeded and "ODT_DOWNLOAD_COMPLETE" in result.stderr:
+                    message = "Office download completed (setup.exe stopped after download)"
                 if result.succeeded and "ODT_IDLE_TIMEOUT" in result.stderr:
                     message = "Office download completed (setup.exe stopped after inactivity)"
                 return OperationResult(app, "download", result.succeeded, message, result.stdout, result.stderr)
@@ -974,6 +976,29 @@ def _directory_size_bytes(path: Path) -> int:
     return total
 
 
+def _directory_payload_size_bytes(path: Path) -> int:
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    ignore_exts = {".log", ".txt"}
+    ignore_names = {"setup.exe", "config.xml"}
+    for root, _, files in os.walk(path):
+        for filename in files:
+            name = filename.lower()
+            if name in ignore_names:
+                continue
+            if Path(name).suffix.lower() in ignore_exts:
+                continue
+            try:
+                total += (Path(root) / filename).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
 def _format_speed(value: float) -> str:
     speed = max(value, 0.0)
     units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
@@ -995,27 +1020,44 @@ def _run_office_download(
     label: str,
     status_callback: Callable[[str], None] | None,
     idle_timeout: float = 180.0,
+    complete_timeout: float = 60.0,
     interval: float = 1.0,
 ) -> CommandExecutionResult:
     proc = subprocess.Popen(cmd, cwd=working_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    last_size = _directory_size_bytes(working_dir)
+    payload_root = working_dir / "Office"
+    if not payload_root.exists():
+        payload_root = working_dir
+    last_size = _directory_payload_size_bytes(payload_root)
     last_time = time.monotonic()
     last_change = last_time
     had_activity = False
     terminated_for_idle = False
+    terminated_for_complete = False
     while True:
         if proc.poll() is not None:
             break
         time.sleep(interval)
-        size = _directory_size_bytes(working_dir)
+        payload_root = working_dir / "Office"
+        if not payload_root.exists():
+            payload_root = working_dir
+        size = _directory_payload_size_bytes(payload_root)
         now = time.monotonic()
         delta_bytes = size - last_size
         speed = delta_bytes / max(now - last_time, 0.001)
         if status_callback:
             status_callback(_format_speed_label(label, speed))
-        if delta_bytes > 0:
+        if delta_bytes != 0:
             had_activity = True
             last_change = now
+        if complete_timeout and had_activity and (now - last_change) >= complete_timeout:
+            terminated_for_complete = True
+            proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            break
         if idle_timeout and (now - last_change) >= idle_timeout:
             terminated_for_idle = True
             proc.terminate()
@@ -1029,6 +1071,10 @@ def _run_office_download(
         last_time = now
     stdout, stderr = proc.communicate()
     returncode = proc.returncode or 0
+    if terminated_for_complete:
+        returncode = 0
+        note = "ODT_DOWNLOAD_COMPLETE: download activity stopped; setup.exe terminated."
+        stderr = f"{stderr}\n{note}" if stderr else note
     if terminated_for_idle:
         returncode = 0 if had_activity else (proc.returncode or 1)
         note = f"ODT_IDLE_TIMEOUT: no download activity for {int(idle_timeout)}s; setup.exe terminated."
