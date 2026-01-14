@@ -341,6 +341,16 @@ class LocalInstallerInfo:
     path_x64: Path | None = None
 
 
+@dataclass(frozen=True)
+class LocalInstallerVersionInfo:
+    version: str | None = None
+    version_x86: str | None = None
+    version_x64: str | None = None
+
+    def has_any(self) -> bool:
+        return bool(self.version or self.version_x86 or self.version_x64)
+
+
 class DirectDownloader(Protocol):
     def fetch(self) -> DirectDownloadInfo:
         ...
@@ -541,6 +551,18 @@ class InstallerService:
             path = _pick_best_candidate(candidates)
         return LocalInstallerInfo(bool(path), path=path)
 
+    def get_local_installer_versions(self, app: AppEntry, info: LocalInstallerInfo) -> LocalInstallerVersionInfo:
+        if not info.exists:
+            return LocalInstallerVersionInfo()
+        if app.download_mode == "office":
+            return LocalInstallerVersionInfo()
+        if app.dual_arch:
+            return LocalInstallerVersionInfo(
+                version_x86=_local_version_from_path(info.path_x86),
+                version_x64=_local_version_from_path(info.path_x64),
+            )
+        return LocalInstallerVersionInfo(version=_local_version_from_path(info.path))
+
     def install_selected(
         self,
         selection: Iterable[str],
@@ -565,14 +587,17 @@ class InstallerService:
         *,
         progress_callback: Callable[[int, int, str], None] | None = None,
         status_callback: Callable[[str], None] | None = None,
+        force_updates: Iterable[str] | None = None,
     ) -> list[OperationResult]:
         results: list[OperationResult] = []
         apps = list(self._selected_apps(selection))
         total = len(apps)
+        force_set = {name.lower() for name in force_updates or []}
         for index, app in enumerate(apps, start=1):
             if status_callback:
                 status_callback(app.name)
-            results.append(self._download_app(app, status_callback=status_callback))
+            force_update = app.name.lower() in force_set
+            results.append(self._download_app(app, status_callback=status_callback, force_update=force_update))
             if progress_callback:
                 progress_callback(index, total, app.name)
         return results
@@ -676,9 +701,13 @@ class InstallerService:
             return self._apply_post_install_steps(app, result)
         return OperationResult(app, "install", False, f"Download mode {app.download_mode} not implemented")
 
-    def _download_app(self, app: AppEntry, *, status_callback: Callable[[str], None] | None = None) -> OperationResult:
-        if status_callback and app.name in {"CrowdStrike Falcon Sensor", "FortiClient VPN"}:
-            status_callback(f"[DEBUG] download_app app={app.name} mode={app.download_mode}")
+    def _download_app(
+        self,
+        app: AppEntry,
+        *,
+        status_callback: Callable[[str], None] | None = None,
+        force_update: bool = False,
+    ) -> OperationResult:
         if app.name == "Office Deployment Tool":
             return OperationResult(app, "download", True, "ODT is managed automatically with Office downloads")
         if app.download_mode == "onlineonly":
@@ -697,7 +726,7 @@ class InstallerService:
             except Exception as exc:
                 return OperationResult(app, "download", False, str(exc))
         if app.download_mode == "direct":
-            return self._download_direct(app, status_callback=status_callback)
+            return self._download_direct(app, status_callback=status_callback, force_update=force_update)
         if app.download_mode == "localonly":
             return OperationResult(app, "download", True, "Local-only package; place installer manually")
         return OperationResult(app, "download", False, f"Download mode {app.download_mode} not implemented")
@@ -814,6 +843,7 @@ class InstallerService:
                 messages.append(f"{stem}: rename failed ({exc})")
                 continue
             shutil.rmtree(temp_dir, ignore_errors=True)
+            _remove_versioned_files(target_root, stem, keep_name=dest_path.name)
             messages.append(f"{stem}: downloaded {dest_path.name}")
         message = "; ".join(messages) if messages else "No packages downloaded"
         return OperationResult(app, "download", success, message, "\n".join(stdout_parts), "\n".join(stderr_parts))
@@ -823,11 +853,9 @@ class InstallerService:
         app: AppEntry,
         *,
         status_callback: Callable[[str], None] | None = None,
+        force_update: bool = False,
     ) -> OperationResult:
         downloader = self._direct_downloaders.get(app.name)
-        if status_callback and app.name in {"CrowdStrike Falcon Sensor", "FortiClient VPN"}:
-            downloader_name = downloader.__class__.__name__ if downloader else "None"
-            status_callback(f"[DEBUG] download_direct app={app.name} downloader={downloader_name}")
         if not downloader:
             return OperationResult(app, "download", False, f"No direct downloader registered for {app.name}")
         try:
@@ -839,19 +867,25 @@ class InstallerService:
         filename = info.filename or f"{stem}_{version}.exe"
         destination_dir = self._downloads_dir / _safe_name(app.name)
         destination_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = destination_dir / filename
+        latest_version = _normalize_version_string(info.version) or info.version
+        latest_tuple = _version_tuple(latest_version)
+        existing_installers = _list_installers(destination_dir)
+        best_path, best_tuple = _best_versioned_installer(existing_installers)
+        local_up_to_date = False
+        update_needed = False
+        if latest_tuple and best_tuple:
+            local_up_to_date = best_tuple >= latest_tuple
+            update_needed = best_tuple < latest_tuple
+        should_update = force_update or update_needed
+        if existing_installers and local_up_to_date and not force_update:
+            best_name = best_path.name if best_path else dest_path.name
+            return OperationResult(app, "download", True, f"Installer already present: {best_name}")
+        if should_update:
+            _remove_installers_in_dir(destination_dir)
         if app.name in {"CrowdStrike Falcon Sensor", "FortiClient VPN"}:
-            if status_callback:
-                status_callback(
-                    "[DEBUG] sharepoint_check app={app} url={url} is_sharepoint={is_sharepoint} dest_dir={dest}".format(
-                        app=app.name,
-                        url=info.url,
-                        is_sharepoint=_is_sharepoint_url(info.url),
-                        dest=destination_dir,
-                    )
-                )
             if not _is_sharepoint_url(info.url):
                 return OperationResult(app, "download", False, f"{app.name} download URL must be a SharePoint link")
-            dest_path = destination_dir / filename
             already_present = dest_path.exists() and _file_has_exe_header(dest_path)
             try:
                 dest_path = _download_sharepoint_exe(
@@ -860,15 +894,14 @@ class InstallerService:
                     filename,
                     status_callback=status_callback,
                     label=app.name,
-                    force=False,
+                    force=should_update,
                 )
             except Exception as exc:
                 return OperationResult(app, "download", False, f"Download error: {exc}")
-            if already_present:
+            if already_present and not should_update:
                 return OperationResult(app, "download", True, f"Installer already present: {dest_path.name}")
             return OperationResult(app, "download", True, f"Downloaded {dest_path.name}")
-        dest_path = destination_dir / filename
-        if dest_path.exists():
+        if dest_path.exists() and not should_update:
             return OperationResult(app, "download", True, f"Installer already present: {dest_path.name}")
         try:
             self._download_file(info.url, dest_path, status_callback=status_callback, label=app.name)
@@ -1086,8 +1119,6 @@ def _contains_permission_error(exc: BaseException) -> bool:
 def _pick_sharepoint_temp_path(
     destination_dir: Path,
     filename: str,
-    *,
-    status_callback: Callable[[str], None] | None = None,
 ) -> Path:
     temp_path = destination_dir / f".{filename}.download"
     if not temp_path.exists():
@@ -1099,8 +1130,6 @@ def _pick_sharepoint_temp_path(
     except OSError:
         suffix = f"{int(time.time())}-{os.getpid()}"
         fallback = destination_dir / f".{filename}.{suffix}.download"
-        if status_callback:
-            status_callback(f"[DEBUG] sharepoint_temp_locked path={temp_path} fallback={fallback}")
         return fallback
 
 
@@ -1122,10 +1151,8 @@ def _download_sharepoint_exe(
     dest_path = destination_dir / filename
     if not force and dest_path.exists() and _file_has_exe_header(dest_path):
         return dest_path
-    temp_path = _pick_sharepoint_temp_path(destination_dir, filename, status_callback=status_callback)
+    temp_path = _pick_sharepoint_temp_path(destination_dir, filename)
     download_url = _sharepoint_download_url(share_url)
-    if status_callback:
-        status_callback(f"[DEBUG] sharepoint_download url={download_url} temp_path={temp_path}")
     for attempt in range(1, 4):
         try:
             _download_file_with_requests(
@@ -1140,17 +1167,13 @@ def _download_sharepoint_exe(
                 raise
             if attempt >= 3:
                 raise
-            if status_callback:
-                status_callback(
-                    f"[DEBUG] sharepoint_download_permission_denied attempt={attempt} path={temp_path}"
-                )
             try:
                 if temp_path.exists():
                     temp_path.unlink()
             except OSError:
                 pass
             time.sleep(0.5 * attempt)
-            temp_path = _pick_sharepoint_temp_path(destination_dir, filename, status_callback=status_callback)
+            temp_path = _pick_sharepoint_temp_path(destination_dir, filename)
     if _file_has_exe_header(temp_path):
         temp_path.replace(dest_path)
         return dest_path
@@ -1201,6 +1224,68 @@ def _extract_version_from_filename(filename: str) -> str | None:
     return None
 
 
+def _local_version_from_path(path: Path | None) -> str | None:
+    if not path or not path.exists() or not path.is_file():
+        return None
+    from_name = _extract_version_from_filename(path.name)
+    if from_name:
+        return from_name
+    file_version = _get_file_version(path)
+    if not file_version:
+        return None
+    return _normalize_version_string(file_version) or file_version
+
+
+def _get_file_version(path: Path) -> str | None:
+    if sys.platform != "win32":
+        return None
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return None
+
+    class VS_FIXEDFILEINFO(ctypes.Structure):
+        _fields_ = [
+            ("dwSignature", wintypes.DWORD),
+            ("dwStrucVersion", wintypes.DWORD),
+            ("dwFileVersionMS", wintypes.DWORD),
+            ("dwFileVersionLS", wintypes.DWORD),
+            ("dwProductVersionMS", wintypes.DWORD),
+            ("dwProductVersionLS", wintypes.DWORD),
+            ("dwFileFlagsMask", wintypes.DWORD),
+            ("dwFileFlags", wintypes.DWORD),
+            ("dwFileOS", wintypes.DWORD),
+            ("dwFileType", wintypes.DWORD),
+            ("dwFileSubtype", wintypes.DWORD),
+            ("dwFileDateMS", wintypes.DWORD),
+            ("dwFileDateLS", wintypes.DWORD),
+        ]
+
+    size = ctypes.windll.version.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        return None
+    data = ctypes.create_string_buffer(size)
+    if not ctypes.windll.version.GetFileVersionInfoW(str(path), 0, size, data):
+        return None
+    value = ctypes.c_void_p()
+    length = wintypes.UINT()
+    if not ctypes.windll.version.VerQueryValueW(data, "\\", ctypes.byref(value), ctypes.byref(length)):
+        return None
+    if length.value < ctypes.sizeof(VS_FIXEDFILEINFO):
+        return None
+    fixed = ctypes.cast(value.value, ctypes.POINTER(VS_FIXEDFILEINFO)).contents
+    if fixed.dwSignature != 0xFEEF04BD:
+        return None
+    major = fixed.dwFileVersionMS >> 16
+    minor = fixed.dwFileVersionMS & 0xFFFF
+    build = fixed.dwFileVersionLS >> 16
+    revision = fixed.dwFileVersionLS & 0xFFFF
+    return f"{major}.{minor}.{build}.{revision}"
+
+
 def _pick_best_candidate(files: Sequence[Path]) -> Path | None:
     best: Path | None = None
     best_version: tuple[int, ...] | None = None
@@ -1214,6 +1299,47 @@ def _pick_best_candidate(files: Sequence[Path]) -> Path | None:
         elif best is None:
             best = candidate
     return best
+
+
+def _list_installers(target_root: Path) -> list[Path]:
+    return list(target_root.glob("*.exe")) + list(target_root.glob("*.msi"))
+
+
+def _best_versioned_installer(candidates: Sequence[Path]) -> tuple[Path | None, tuple[int, ...] | None]:
+    best_path: Path | None = None
+    best_version: tuple[int, ...] | None = None
+    for candidate in candidates:
+        version = _local_version_from_path(candidate)
+        version_tuple = _version_tuple(version)
+        if not version_tuple:
+            continue
+        if best_version is None or version_tuple > best_version:
+            best_version = version_tuple
+            best_path = candidate
+    return best_path, best_version
+
+
+def _remove_versioned_files(target_root: Path, stem: str, *, keep_name: str | None = None) -> None:
+    pattern = f"{stem}_*"
+    for candidate in target_root.glob(pattern):
+        if candidate.suffix.lower() not in {".exe", ".msi"}:
+            continue
+        if keep_name and candidate.name == keep_name:
+            continue
+        try:
+            candidate.unlink()
+        except OSError:
+            continue
+
+
+def _remove_installers_in_dir(target_root: Path) -> None:
+    for candidate in target_root.glob("*"):
+        if candidate.suffix.lower() not in {".exe", ".msi"}:
+            continue
+        try:
+            candidate.unlink()
+        except OSError:
+            continue
 
 
 def _safe_name(name: str) -> str:

@@ -5,10 +5,13 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from services.privilege import ensure_admin
 from ui.main_window import MainWindow
 
 
 def main() -> int:
+    if not ensure_admin():
+        return 0
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

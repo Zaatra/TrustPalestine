@@ -10,7 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
-from services.installer import HPSADownloader, IVMSDownloader, WingetClient, WingetError, _download_sharepoint_exe, _is_sharepoint_url
+from services.installer import (
+    HPSADownloader,
+    IVMSDownloader,
+    LocalInstallerVersionInfo,
+    WingetClient,
+    WingetError,
+    _download_sharepoint_exe,
+    _is_sharepoint_url,
+)
 from allinone_it_config.app_registry import AppEntry
 from allinone_it_config.paths import get_application_directory
 from allinone_it_config.user_settings import UserSettings
@@ -234,6 +242,37 @@ class AppStatusService:
             if progress_callback:
                 progress_callback(index, total, app.name)
         return results
+
+    def offline_installer_status(
+        self,
+        app: AppEntry,
+        local_versions: LocalInstallerVersionInfo,
+        latest_text: str,
+    ) -> str | None:
+        if not local_versions.has_any():
+            return None
+        if self._latest_unknown(latest_text):
+            return None
+        if app.name in {"Office 2024 LTSC", "Office 365 Ent"}:
+            return None
+        if app.dual_arch:
+            if not local_versions.version_x86:
+                return None
+            if _is_64bit() and not local_versions.version_x64:
+                return None
+            latest_x86, latest_x64 = _parse_dual_text(latest_text)
+            if not latest_x86 or latest_x86 in _LATEST_UNKNOWN:
+                return None
+            if _is_64bit() and (not latest_x64 or latest_x64 in _LATEST_UNKNOWN):
+                return None
+            ok86 = _version_ge(local_versions.version_x86, latest_x86)
+            ok64 = True
+            if _is_64bit():
+                ok64 = _version_ge(local_versions.version_x64 or "", latest_x64)
+            return "Latest" if ok86 and ok64 else "Outdated"
+        if not local_versions.version:
+            return None
+        return "Latest" if _version_ge(local_versions.version, latest_text) else "Outdated"
 
     def _read_uninstall_entries(self) -> list[_UninstallEntry]:
         if winreg is None:

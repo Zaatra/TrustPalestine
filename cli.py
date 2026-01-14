@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 
+from services.privilege import ensure_admin
+
 
 def main() -> int:
+    if not ensure_admin():
+        return 0
     parser = argparse.ArgumentParser(description="All-In-One IT Configuration Tool automation CLI")
     parser.add_argument("command", help="Operation to run", choices=["check", "apply", "install", "drivers"])
     parser.parse_args()

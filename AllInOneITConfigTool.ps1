@@ -961,8 +961,7 @@ function Get-LegacyRepoPackages {
         }
     }
     
-    # Debugging help if it still fails
-    Log-Driver "Debug: Could not find manifest.json. Checked paths:"
+    Log-Driver "Could not find manifest.json. Checked paths:"
     foreach ($p in $potentialPaths) { Log-Driver " [x] $p" }
     
     return @()
@@ -2208,8 +2207,6 @@ function Scan-Drivers {
         Update-DriverCounts
         
         Log-Driver "Scan complete. Found $($allDrivers.Count) drivers/updates."
-        Log-Driver "DEBUG: Grid has $($dgvDrivers.Rows.Count) rows visible in DataGridView"
-        
         # === REMOVE AUTO-SELECTION ===
         $dgvDrivers.ClearSelection()
         $dgvDrivers.CurrentCell = $null

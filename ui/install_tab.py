@@ -23,8 +23,8 @@ from PySide6.QtWidgets import (
 )
 
 from services.app_status import AppStatusService, AppUpdateResult, InstalledInfo
-from services.installer import InstallerService, OperationResult
-from allinone_it_config.app_registry import AppRegistry, build_registry
+from services.installer import InstallerService, LocalInstallerInfo, OperationResult
+from allinone_it_config.app_registry import AppEntry, AppRegistry, build_registry
 from allinone_it_config.paths import get_application_directory
 from allinone_it_config.user_settings import SettingsStore, UserSettings
 from ui.settings_dialog import SettingsDialog
@@ -67,6 +67,7 @@ class InstallTab(QWidget):
             settings=self._settings,
         )
         self._installed_map: dict[str, InstalledInfo] = {}
+        self._latest_versions: dict[str, str] = {}
         self._row_by_name: dict[str, int] = {}
         self._busy = False
         self._action_label = ""
@@ -186,6 +187,7 @@ class InstallTab(QWidget):
             settings=self._settings,
         )
         self._installed_map.clear()
+        self._latest_versions.clear()
         self._populate_table()
         self._refresh_offline_status()
         if not self._busy:
@@ -216,6 +218,17 @@ class InstallTab(QWidget):
         if action == "install_selected":
             if not self._confirm_local_version_overrides(selection):
                 return
+        force_updates: set[str] = set()
+        if action == "download_selected" and self._latest_versions:
+            selection_set = {name.lower() for name in selection}
+            for app in self._registry.entries:
+                if app.name.lower() not in selection_set:
+                    continue
+                local_info = self._service.get_local_installer_info(app, include_downloads=True)
+                if not local_info.exists:
+                    continue
+                if self._offline_version_status(app, local_info) == "Outdated":
+                    force_updates.add(app.name)
         if not hasattr(self._service, action):
             QMessageBox.warning(self, "Unsupported", f"Unknown installer action: {action}")
             return
@@ -227,6 +240,8 @@ class InstallTab(QWidget):
         worker = ServiceWorker(getattr(self._service, action), selection)
         worker.kwargs["progress_callback"] = worker.signals.progress.emit
         worker.kwargs["status_callback"] = worker.signals.message.emit
+        if action == "download_selected":
+            worker.kwargs["force_updates"] = force_updates
         worker.signals.finished.connect(lambda result, action=action: self._handle_results(action, result))
         worker.signals.error.connect(self._handle_error)
         worker.signals.progress.connect(self._handle_action_progress)
@@ -239,7 +254,7 @@ class InstallTab(QWidget):
             self._log(f"[{status}] {action} :: {result.app.name} -> {result.message}")
         self._busy = False
         self._set_buttons_enabled(True)
-        self._end_action_progress()
+        self._complete_action_progress()
         self._update_progress.setVisible(False)
         if action == "download_selected":
             self._refresh_offline_status()
@@ -250,7 +265,7 @@ class InstallTab(QWidget):
         self._log(f"[ERROR] {message}")
         self._busy = False
         self._set_buttons_enabled(True)
-        self._end_action_progress()
+        self._complete_action_progress()
         self._update_progress.setVisible(False)
 
     def _ensure_settings_for(self, action: str, selection: list[str]) -> bool:
@@ -382,11 +397,30 @@ class InstallTab(QWidget):
             local_info = self._service.get_local_installer_info(app, include_downloads=True)
             if local_info.exists:
                 text = "Ready"
+                suffix = self._offline_version_status(app, local_info)
+                if suffix:
+                    text = f"{text} - {suffix}"
             elif self._service.is_downloadable(app):
                 text = "Downloadable"
             else:
                 text = "Not Downloadable"
             self._set_item_text(row, self.COL_OFFLINE, text)
+
+    def _offline_version_status(self, app: AppEntry, local_info: LocalInstallerInfo) -> str | None:
+        if not self._has_downloaded_installer(local_info):
+            return None
+        latest_text = self._latest_versions.get(app.name)
+        if not latest_text:
+            return None
+        local_versions = self._service.get_local_installer_versions(app, local_info)
+        return self._status_service.offline_installer_status(app, local_versions, latest_text)
+
+    def _has_downloaded_installer(self, local_info: LocalInstallerInfo) -> bool:
+        downloads_root = self._working_dir / "downloads"
+        for path in (local_info.path, local_info.path_x86, local_info.path_x64):
+            if path and _is_in_dir(path, downloads_root):
+                return True
+        return False
 
     def _start_update_check(self) -> None:
         if self._busy:
@@ -413,7 +447,9 @@ class InstallTab(QWidget):
         self._thread_pool.start(worker)
 
     def _handle_update_results(self, results: Iterable[AppUpdateResult]) -> None:
-        for result in results:
+        results_list = list(results)
+        self._latest_versions = {result.app.name: result.latest_text for result in results_list}
+        for result in results_list:
             row = self._row_by_name.get(result.app.name)
             if row is None:
                 continue
@@ -424,6 +460,7 @@ class InstallTab(QWidget):
         self._busy = False
         self._set_buttons_enabled(True)
         self._update_progress.setVisible(False)
+        self._refresh_offline_status()
 
     def _handle_update_progress(self, current: int, total: int, app_name: str) -> None:
         if total > 0:
@@ -440,8 +477,7 @@ class InstallTab(QWidget):
         self._update_action_progress_text()
 
     def _handle_action_message(self, message: str) -> None:
-        if message.startswith("[DEBUG]"):
-            self._log(message)
+        if not self._busy:
             return
         self._action_app = message
         self._update_action_progress_text()
@@ -468,6 +504,13 @@ class InstallTab(QWidget):
         self._action_timer.stop()
         self._action_progress.setVisible(False)
         self._action_started_at = None
+
+    def _complete_action_progress(self) -> None:
+        if self._action_total:
+            self._action_current = self._action_total
+            self._action_progress.setValue(self._action_total)
+            self._update_action_progress_text()
+        self._end_action_progress()
 
     def _update_action_progress_text(self) -> None:
         elapsed = 0
@@ -539,6 +582,14 @@ def _file_exists(path: str) -> bool:
         return False
     candidate = Path(path)
     return candidate.exists() and candidate.is_file()
+
+
+def _is_in_dir(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _format_elapsed(total_seconds: int) -> str:
