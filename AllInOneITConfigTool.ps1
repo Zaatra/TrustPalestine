@@ -502,37 +502,60 @@ function Get-OfficeVerWeb {
 
 
 function Connect-Repo-WithAuth {
-    # Check if we can already see the folder
-    if (Test-Path $Global:HPLegacyRepoRoot) { 
-        return $true 
+    # Try to check if we can already see the folder (suppress errors)
+    try {
+        $testResult = Test-Path $Global:HPLegacyRepoRoot -ErrorAction Stop
+        if ($testResult) {
+            Log-Driver "[REPO] Network repository accessible (already authenticated)."
+            return $true
+        }
+    } catch {
+        # Test-Path failed (likely auth error) - continue to prompt for credentials
+        Log-Driver "[REPO] Cannot access repository: $_"
     }
 
-    # If not, show the Pop-up
+    # Show authentication dialog
     try {
-        # This opens the standard Windows Security Dialog
+        Log-Driver "[REPO] Prompting for network credentials..."
         $cred = Get-Credential -UserName "TRUST.COM\" -Message "Authentication Required for Drivers Repo`nPath: $Global:HPLegacyRepoRoot"
-        
-        if (-not $cred) { return $false } # User clicked Cancel
+
+        if (-not $cred) {
+            Log-Driver "[REPO] Authentication cancelled by user."
+            return $false
+        }
 
         $userName = $cred.UserName
         $password = $cred.GetNetworkCredential().Password
 
         # Determine the share root (net use prefers the root share, e.g., \\192.168.168.6\Admin Tools)
-        # We split the path to find the share root
         $pathParts = $Global:HPLegacyRepoRoot.Split('\')
-        $shareRoot = "\\" + $pathParts[2] + "\" + $pathParts[3] 
+        if ($pathParts.Count -lt 4) {
+            Log-Driver "[REPO] Invalid repository path format: $Global:HPLegacyRepoRoot"
+            return $false
+        }
+        $shareRoot = "\\" + $pathParts[2] + "\" + $pathParts[3]
 
         # Use 'net use' to authenticate
-        # We use Start-Process to handle special characters in passwords safely
+        Log-Driver "[REPO] Authenticating to: $shareRoot"
         $proc = Start-Process "net.exe" -ArgumentList "use", "`"$shareRoot`"", "`"$password`"", "/user:`"$userName`"" -WindowStyle Hidden -Wait -PassThru
 
         if ($proc.ExitCode -eq 0) {
-            return $true
+            # Verify we can now access the path
+            if (Test-Path $Global:HPLegacyRepoRoot -ErrorAction SilentlyContinue) {
+                Log-Driver "[REPO] Authentication successful."
+                return $true
+            } else {
+                Log-Driver "[REPO] Authenticated to share but cannot access repository folder."
+                [System.Windows.Forms.MessageBox]::Show("Connected to server but cannot find repository folder.`n`nPath: $Global:HPLegacyRepoRoot", "Repository Not Found", "OK", "Warning")
+                return $false
+            }
         } else {
-            [System.Windows.Forms.MessageBox]::Show("Login failed. Please check your password.", "Authentication Error", "OK", "Error")
+            Log-Driver "[REPO] Authentication failed (net use exit code: $($proc.ExitCode))."
+            [System.Windows.Forms.MessageBox]::Show("Login failed. Please check your username and password.`n`nExit code: $($proc.ExitCode)", "Authentication Error", "OK", "Error")
             return $false
         }
     } catch {
+        Log-Driver "[REPO] Authentication error: $_"
         return $false
     }
 }
@@ -1491,33 +1514,44 @@ $lblSelectLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $flowBtnRow2.Controls.Add($lblSelectLabel)
 
 $btnSelectNeedsUpdate = New-Object System.Windows.Forms.Button
-$btnSelectNeedsUpdate.Text = "Updates Available"
+$btnSelectNeedsUpdate.Text = "Updates"
 $btnSelectNeedsUpdate.Font = $FontSmall
-$btnSelectNeedsUpdate.Size = New-Object System.Drawing.Size(115, 26)
-$btnSelectNeedsUpdate.Margin = New-Object System.Windows.Forms.Padding(0, 0, 5, 0)
-$btnSelectNeedsUpdate.BackColor = [System.Drawing.Color]::DarkOrange
+$btnSelectNeedsUpdate.Size = New-Object System.Drawing.Size(70, 26)
+$btnSelectNeedsUpdate.Margin = New-Object System.Windows.Forms.Padding(0, 0, 3, 0)
+$btnSelectNeedsUpdate.BackColor = [System.Drawing.Color]::FromArgb(245, 124, 0)
 $btnSelectNeedsUpdate.ForeColor = [System.Drawing.Color]::White
 $btnSelectNeedsUpdate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnSelectNeedsUpdate.FlatAppearance.BorderSize = 0
 $flowBtnRow2.Controls.Add($btnSelectNeedsUpdate)
 
 $btnSelectNotInstalled = New-Object System.Windows.Forms.Button
-$btnSelectNotInstalled.Text = "Not Installed"
+$btnSelectNotInstalled.Text = "Missing"
 $btnSelectNotInstalled.Font = $FontSmall
-$btnSelectNotInstalled.Size = New-Object System.Drawing.Size(90, 26)
-$btnSelectNotInstalled.Margin = New-Object System.Windows.Forms.Padding(0, 0, 5, 0)
-$btnSelectNotInstalled.BackColor = [System.Drawing.Color]::IndianRed
+$btnSelectNotInstalled.Size = New-Object System.Drawing.Size(60, 26)
+$btnSelectNotInstalled.Margin = New-Object System.Windows.Forms.Padding(0, 0, 3, 0)
+$btnSelectNotInstalled.BackColor = [System.Drawing.Color]::FromArgb(194, 24, 91)
 $btnSelectNotInstalled.ForeColor = [System.Drawing.Color]::White
 $btnSelectNotInstalled.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnSelectNotInstalled.FlatAppearance.BorderSize = 0
 $flowBtnRow2.Controls.Add($btnSelectNotInstalled)
 
+$btnSelectOptional = New-Object System.Windows.Forms.Button
+$btnSelectOptional.Text = "Optional"
+$btnSelectOptional.Font = $FontSmall
+$btnSelectOptional.Size = New-Object System.Drawing.Size(65, 26)
+$btnSelectOptional.Margin = New-Object System.Windows.Forms.Padding(0, 0, 3, 0)
+$btnSelectOptional.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243)
+$btnSelectOptional.ForeColor = [System.Drawing.Color]::White
+$btnSelectOptional.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnSelectOptional.FlatAppearance.BorderSize = 0
+$flowBtnRow2.Controls.Add($btnSelectOptional)
+
 $btnSelectInstalled = New-Object System.Windows.Forms.Button
-$btnSelectInstalled.Text = "Up to Date"
+$btnSelectInstalled.Text = "Installed"
 $btnSelectInstalled.Font = $FontSmall
-$btnSelectInstalled.Size = New-Object System.Drawing.Size(80, 26)
+$btnSelectInstalled.Size = New-Object System.Drawing.Size(65, 26)
 $btnSelectInstalled.Margin = New-Object System.Windows.Forms.Padding(0, 0, 5, 0)
-$btnSelectInstalled.BackColor = [System.Drawing.Color]::ForestGreen
+$btnSelectInstalled.BackColor = [System.Drawing.Color]::FromArgb(56, 142, 60)
 $btnSelectInstalled.ForeColor = [System.Drawing.Color]::White
 $btnSelectInstalled.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnSelectInstalled.FlatAppearance.BorderSize = 0
@@ -1997,21 +2031,43 @@ function Update-DriverCounts {
     $upToDate = 0
     $needsUpdate = 0
     $notInstalled = 0
+    $optional = 0
+    $hpiaCount = 0
+    $cmslCount = 0
+    $repoCount = 0
 
     foreach ($row in $dgvDrivers.Rows) {
         $status = $row.Cells["Status"].Value
+        $source = $row.Cells["Source"].Value
+
         switch -Regex ($status) {
             "Up to Date|Installed" { $upToDate++ }
             "Update Available|Critical|Recommended" { $needsUpdate++ }
             "Not Installed|Not Found" { $notInstalled++ }
+            "Optional" { $optional++ }
+        }
+
+        switch ($source) {
+            "HPIA" { $hpiaCount++ }
+            "CMSL" { $cmslCount++ }
+            "Repo" { $repoCount++ }
         }
     }
 
     $total = $dgvDrivers.Rows.Count
-    $lblDriverCounts.Text = "Total: $total  |  " +
-        "Up to Date: $upToDate  |  " +
-        "Updates Available: $needsUpdate  |  " +
-        "Not Installed: $notInstalled"
+
+    # Build source summary
+    $sourceParts = @()
+    if ($hpiaCount -gt 0) { $sourceParts += "HPIA: $hpiaCount" }
+    if ($cmslCount -gt 0) { $sourceParts += "CMSL: $cmslCount" }
+    if ($repoCount -gt 0) { $sourceParts += "Repo: $repoCount" }
+    $sourceInfo = if ($sourceParts.Count -gt 0) { " [$($sourceParts -join ', ')]" } else { "" }
+
+    $lblDriverCounts.Text = "Total: $total$sourceInfo  |  " +
+        "Installed: $upToDate  |  " +
+        "Updates: $needsUpdate  |  " +
+        "Missing: $notInstalled  |  " +
+        "Optional: $optional"
 
     $lblDriverCounts.ForeColor = [System.Drawing.Color]::Black
 }
@@ -2036,83 +2092,133 @@ function Scan-Drivers {
         Log-Driver "Found $($Global:InstalledDriversCache.Count) installed items."
 
         $allDrivers = @()
+        $scannedSources = @()
 
         # ----------------------------------------
-        # LEGACY LOGIC with AUTO-AUTH
+        # UNIFIED SCANNING - Try ALL available sources
+        # Priority: HPIA → CMSL → Legacy Repository
         # ----------------------------------------
-        if (-not $si.SupportsHPIA -and -not $si.SupportsCMSL) {
-            Log-Driver "Legacy system detected. Checking offline repository..."
-            
-            # === NEW: TRIGGER AUTHENTICATION IF NEEDED ===
-            if (-not (Connect-Repo-WithAuth)) {
-                Log-Driver "Error: Could not access network repository. Authentication failed or cancelled."
-                [System.Windows.Forms.MessageBox]::Show("Could not access the network repository.`n`nPlease ensure you have permission to access:`n$Global:HPLegacyRepoRoot", "Network Error", "OK", "Error")
-            } 
-            else {
-                # Proceed only if Auth was successful
-                $repoPackages = Get-LegacyRepoPackages -Platform $si.ProductCode -Model $si.Model
-                
-                if ($repoPackages.Count -gt 0) {
-                    Log-Driver "Found $($repoPackages.Count) packages in legacy repository."
-                    foreach ($pkg in $repoPackages) {
-                        $status = Get-DriverInstallStatus -DriverName $pkg.Name -Category $pkg.Category -AvailableVersion $pkg.Version
-                        
-                        if ($pkg.Category -match "BIOS") {
-                            if ($status.Status -eq "Update Available") { $status.Status = "Critical" }
-                        }
 
-                        $allDrivers += [PSCustomObject]@{
-                            Source = "Repo"
-                            Name = $pkg.Name
-                            Category = $pkg.Category
-                            Version = $pkg.Version
-                            InstalledVersion = $status.InstalledVersion
-                            SoftPaqId = $pkg.SoftPaqId
-                            Url = (Join-Path $pkg._RepoPath "SoftPaqs\$($pkg.FileName)")
-                            Size = "Local"
-                            Status = $status.Status
-                            Selected = $false
-                            FilePath = $null
-                        }
-                    }
-                } else {
-                    Log-Driver "No offline repository found for this model."
-                    Log-Driver "Looked in: $Global:HPLegacyRepoRoot"
-                }
-            }
-        } 
-        else {
-            # ----------------------------------------
-            # MODERN LOGIC (HPIA / CMSL)
-            # ----------------------------------------
-            
-            # Try HPIA first
-            if ($si.SupportsHPIA) {
-                Log-Driver "System supports HPIA - attempting HPIA scan..."
+        # --- 1. HPIA SCAN (Best for modern HP systems) ---
+        $hpiaSuccess = $false
+        if ($si.SupportsHPIA) {
+            Log-Driver "[HPIA] System supports HP Image Assistant - attempting scan..."
+            try {
                 $hpiaPath = Get-HPIAPath
                 if (-not $hpiaPath) {
-                    Log-Driver "HPIA not found locally. Downloading..."
+                    Log-Driver "[HPIA] Not found locally. Downloading..."
                     $hpiaPath = Download-HPIA
                 }
 
                 if ($hpiaPath -and (Test-Path $hpiaPath)) {
                     $hpiaDrivers = Scan-HPDrivers-HPIA -HPIAPath $hpiaPath
-                    $allDrivers += $hpiaDrivers
-                } else {
-                    Log-Driver "HPIA not available. Falling back to CMSL."
-                }
-            }
-
-            # Use CMSL
-            if ($si.SupportsCMSL -and $si.ProductCode) {
-                $cmslDrivers = Scan-HPDrivers-CMSL -Platform $si.ProductCode
-                $existingIds = $allDrivers | ForEach-Object { $_.SoftPaqId } | Where-Object { $_ }
-                foreach ($cd in $cmslDrivers) {
-                    if ($cd.SoftPaqId -notin $existingIds) {
-                        $allDrivers += $cd
+                    if ($hpiaDrivers.Count -gt 0) {
+                        $allDrivers += $hpiaDrivers
+                        $scannedSources += "HPIA"
+                        $hpiaSuccess = $true
+                        Log-Driver "[HPIA] Found $($hpiaDrivers.Count) driver recommendations."
+                    } else {
+                        Log-Driver "[HPIA] Scan completed but found no recommendations."
                     }
+                } else {
+                    Log-Driver "[HPIA] Could not locate HP Image Assistant executable."
                 }
+            } catch {
+                Log-Driver "[HPIA] Scan error: $_"
             }
+        } else {
+            Log-Driver "[HPIA] System does not support HP Image Assistant (requires G3+ generation)."
+        }
+
+        # --- 2. CMSL SCAN (HP Client Management Script Library) ---
+        if ($si.SupportsCMSL -and $si.ProductCode) {
+            Log-Driver "[CMSL] Attempting HP CMSL scan for platform: $($si.ProductCode)..."
+            try {
+                $cmslDrivers = Scan-HPDrivers-CMSL -Platform $si.ProductCode
+                if ($cmslDrivers.Count -gt 0) {
+                    # Deduplicate against HPIA results
+                    $existingIds = $allDrivers | ForEach-Object { $_.SoftPaqId } | Where-Object { $_ }
+                    $newCmsl = @()
+                    foreach ($cd in $cmslDrivers) {
+                        if ($cd.SoftPaqId -notin $existingIds) {
+                            $newCmsl += $cd
+                        }
+                    }
+                    if ($newCmsl.Count -gt 0) {
+                        $allDrivers += $newCmsl
+                        $scannedSources += "CMSL"
+                        Log-Driver "[CMSL] Found $($newCmsl.Count) additional drivers (after deduplication)."
+                    } else {
+                        Log-Driver "[CMSL] All CMSL drivers already covered by HPIA."
+                    }
+                } else {
+                    Log-Driver "[CMSL] Scan completed but found no drivers."
+                }
+            } catch {
+                Log-Driver "[CMSL] Scan error: $_"
+            }
+        } elseif (-not $si.SupportsCMSL) {
+            Log-Driver "[CMSL] System does not support CMSL (Windows 7/8 detected)."
+        } elseif (-not $si.ProductCode) {
+            Log-Driver "[CMSL] Cannot scan - no platform code available."
+        }
+
+        # --- 3. LEGACY REPOSITORY (Offline fallback for old systems) ---
+        # Only use if online scanning found nothing OR for legacy systems
+        $tryLegacy = (-not $si.SupportsHPIA -and -not $si.SupportsCMSL) -or ($allDrivers.Count -eq 0)
+
+        if ($tryLegacy) {
+            Log-Driver "[REPO] Checking offline legacy repository..."
+            try {
+                if (Connect-Repo-WithAuth) {
+                    $repoPackages = Get-LegacyRepoPackages -Platform $si.ProductCode -Model $si.Model
+
+                    if ($repoPackages.Count -gt 0) {
+                        Log-Driver "[REPO] Found $($repoPackages.Count) packages in legacy repository."
+                        $existingIds = $allDrivers | ForEach-Object { $_.SoftPaqId } | Where-Object { $_ }
+
+                        foreach ($pkg in $repoPackages) {
+                            # Skip if already found via HPIA/CMSL
+                            if ($pkg.SoftPaqId -in $existingIds) { continue }
+
+                            $status = Get-DriverInstallStatus -DriverName $pkg.Name -Category $pkg.Category -AvailableVersion $pkg.Version
+
+                            if ($pkg.Category -match "BIOS") {
+                                if ($status.Status -eq "Update Available") { $status.Status = "Critical" }
+                            }
+
+                            $allDrivers += [PSCustomObject]@{
+                                Source = "Repo"
+                                Name = $pkg.Name
+                                Category = $pkg.Category
+                                Version = $pkg.Version
+                                InstalledVersion = $status.InstalledVersion
+                                SoftPaqId = $pkg.SoftPaqId
+                                Url = (Join-Path $pkg._RepoPath "SoftPaqs\$($pkg.FileName)")
+                                Size = "Local"
+                                Status = $status.Status
+                                Selected = $false
+                                FilePath = $null
+                            }
+                        }
+                        $scannedSources += "Repo"
+                    } else {
+                        Log-Driver "[REPO] No packages found for this model."
+                        Log-Driver "[REPO] Searched paths under: $Global:HPLegacyRepoRoot"
+                    }
+                } else {
+                    Log-Driver "[REPO] Could not access network repository (authentication failed or cancelled)."
+                }
+            } catch {
+                Log-Driver "[REPO] Error accessing legacy repository: $_"
+            }
+        }
+
+        # Log scan summary
+        if ($scannedSources.Count -gt 0) {
+            Log-Driver "Scan sources used: $($scannedSources -join ', ')"
+        } else {
+            Log-Driver "Warning: No scan sources were successful. Check system compatibility and network access."
         }
 
         # Sort: Critical > Update Available > Not Installed > Up to Date
@@ -2152,45 +2258,85 @@ function Scan-Drivers {
             $row.Cells["Status"].Value = $drv.Status
             $row.Cells["SoftPaqId"].Value = $drv.SoftPaqId
 
-            # Source badge color
-            if ($drv.Source -eq "HPIA") {
-                $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(0, 122, 204)
-                $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
-            } 
-            elseif ($drv.Source -eq "Repo") {
-                $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::Purple
-                $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
-            }
-            else {
-                $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(108, 117, 125)
-                $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
+            # ============================================
+            # SOURCE BADGE COLORS (Distinct badge styling)
+            # ============================================
+            # Center-align source cells for badge effect
+            $row.Cells["Source"].Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
+            $row.Cells["Source"].Style.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+
+            switch ($drv.Source) {
+                "HPIA" {
+                    # Blue badge - HP Image Assistant (recommended/modern)
+                    $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+                    $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
+                }
+                "CMSL" {
+                    # Teal/Cyan badge - HP Command Line Script Library
+                    $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 136)
+                    $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
+                }
+                "Repo" {
+                    # Purple badge - Offline/Legacy Repository
+                    $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(103, 58, 183)
+                    $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
+                }
+                default {
+                    # Gray badge - Unknown source
+                    $row.Cells["Source"].Style.BackColor = [System.Drawing.Color]::FromArgb(96, 125, 139)
+                    $row.Cells["Source"].Style.ForeColor = [System.Drawing.Color]::White
+                }
             }
 
-            # Status/Row color
+            # ============================================
+            # STATUS BADGE COLORS (Clear visual hierarchy)
+            # ============================================
+            # Center-align status cells for badge effect
+            $row.Cells["Status"].Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
+            $row.Cells["Status"].Style.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Bold)
+
             switch -Regex ($drv.Status) {
                 "Critical" {
-                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 200, 200)
-                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::Red
+                    # RED - Critical/Security updates (highest priority)
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 235, 238)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(211, 47, 47)
                     $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
                 }
-                "Recommended|Update Available" {
-                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 240, 200)
-                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::DarkOrange
+                "Recommended" {
+                    # ORANGE - Recommended updates from HPIA
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 243, 224)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(245, 124, 0)
                     $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
+                }
+                "Update Available" {
+                    # AMBER - Updates available from CMSL/Repo
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 225)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(255, 160, 0)
+                    $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::Black
                 }
                 "Not Installed|Not Found" {
-                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(255, 220, 220)
-                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::IndianRed
+                    # PINK/ROSE - Not installed (needs attention)
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(252, 228, 236)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(194, 24, 91)
+                    $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
+                }
+                "Optional" {
+                    # LIGHT BLUE - Optional updates (low priority, still visible)
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(227, 242, 253)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243)
                     $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
                 }
                 "Up to Date|Installed" {
-                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(200, 255, 200)
-                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::ForestGreen
+                    # GREEN - Installed/Up to date (good state)
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(232, 245, 233)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(56, 142, 60)
                     $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
                 }
                 default {
-                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::White
-                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::LightGray
+                    # GRAY - Unknown status
+                    $row.DefaultCellStyle.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
+                    $row.Cells["Status"].Style.BackColor = [System.Drawing.Color]::FromArgb(117, 117, 117)
+                    $row.Cells["Status"].Style.ForeColor = [System.Drawing.Color]::White
                 }
             }
 
@@ -2633,6 +2779,13 @@ $btnSelectInstalled.Add_Click({
     foreach ($row in $dgvDrivers.Rows) {
         $status = $row.Cells["Status"].Value
         $row.Cells["Select"].Value = ($status -match "Up to Date|Installed")
+    }
+})
+
+$btnSelectOptional.Add_Click({
+    foreach ($row in $dgvDrivers.Rows) {
+        $status = $row.Cells["Status"].Value
+        $row.Cells["Select"].Value = ($status -eq "Optional")
     }
 })
 
