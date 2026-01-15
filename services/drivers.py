@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -10,6 +11,11 @@ from typing import Callable, Iterable, Protocol, Sequence
 
 from allinone_it_config.constants import IMMUTABLE_CONFIG
 from allinone_it_config.paths import get_application_directory
+
+try:
+    import winreg  # type: ignore[import-not-found]
+except ImportError:
+    winreg = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -37,9 +43,248 @@ class DriverOperationResult:
 class HPSystemInfo:
     platform_id: str | None = None
     model: str | None = None
+    manufacturer: str | None = None
+    serial_number: str | None = None
+    sku: str | None = None
+    generation: int | None = None
+    os_version: str | None = None
+    os_build: str | None = None
     supports_hpia: bool = False
     supports_cmsl: bool = False
     supports_legacy_repo: bool = True
+
+
+@dataclass
+class InstalledItem:
+    name: str
+    version: str
+    publisher: str | None = None
+
+
+def _normalize_version(version_str: str | None) -> str:
+    if not version_str:
+        return "0.0.0.0"
+    parts = version_str.strip().split(".")
+    while len(parts) < 4:
+        parts.append("0")
+    return ".".join(parts[:4])
+
+
+def _compare_versions(installed: str | None, available: str | None) -> int:
+    if not installed or not available:
+        return 0
+    norm_installed = _normalize_version(installed)
+    norm_available = _normalize_version(available)
+    try:
+        inst_parts = [int(p) for p in norm_installed.split(".")]
+        avail_parts = [int(p) for p in norm_available.split(".")]
+        if avail_parts > inst_parts:
+            return 1
+        if avail_parts < inst_parts:
+            return -1
+        return 0
+    except (ValueError, AttributeError):
+        return 0
+
+
+def get_hp_system_info(*, powershell: str = "powershell") -> HPSystemInfo:
+    info = HPSystemInfo()
+    if not shutil.which(powershell):
+        return info
+    script = """
+    $cs = Get-WmiObject Win32_ComputerSystem
+    $bios = Get-WmiObject Win32_BIOS
+    $bb = Get-WmiObject Win32_BaseBoard
+    $os = Get-WmiObject Win32_OperatingSystem
+    $csProduct = Get-WmiObject Win32_ComputerSystemProduct
+    $result = @{
+        Manufacturer = $cs.Manufacturer
+        Model = $cs.Model
+        SerialNumber = $bios.SerialNumber
+        ProductCode = $bb.Product
+        OSVersion = $os.Caption
+        OSBuild = $os.BuildNumber
+        SKU = $csProduct.SKUNumber
+    }
+    $regPath = 'HKLM:\\HARDWARE\\DESCRIPTION\\System\\BIOS'
+    $biosReg = Get-ItemProperty $regPath -ErrorAction SilentlyContinue
+    if ($biosReg -and $biosReg.SystemSKU) {
+        $result.SKU = $biosReg.SystemSKU
+        if (-not $result.ProductCode -or $result.ProductCode.Length -lt 4) {
+            $result.ProductCode = $biosReg.SystemSKU
+        }
+    }
+    $result | ConvertTo-Json -Compress
+    """
+    try:
+        result = subprocess.run([powershell, "-NoProfile", "-Command", script], capture_output=True, text=True, check=False, timeout=10)
+        if result.returncode == 0 and result.stdout:
+            data = json.loads(result.stdout)
+            manufacturer = data.get("Manufacturer", "")
+            model = data.get("Model", "")
+            os_version = data.get("OSVersion", "")
+            if re.search(r"HP|Hewlett|Packard", manufacturer, re.IGNORECASE):
+                info.manufacturer = manufacturer
+                info.model = model
+                info.serial_number = data.get("SerialNumber")
+                info.platform_id = data.get("ProductCode") or data.get("SKU")
+                info.sku = data.get("SKU")
+                info.os_version = os_version
+                info.os_build = data.get("OSBuild")
+                gen_match = re.search(r"G(\d+)", model)
+                if gen_match:
+                    info.generation = int(gen_match.group(1))
+                info.supports_hpia = (info.generation is not None and info.generation >= 3) or bool(
+                    re.search(r"Z[0-9]+ G|ZBook.*G[3-9]|Elite.*G[3-9]|Pro.*G[3-9]", model, re.IGNORECASE)
+                )
+                if re.search(r"Windows 7|Windows 8", os_version, re.IGNORECASE):
+                    info.supports_cmsl = False
+                else:
+                    info.supports_cmsl = True
+                if re.search(r"Compaq|Pro3?500|dc\d{4}|8[0-3]00", model, re.IGNORECASE):
+                    info.supports_hpia = False
+                    info.supports_cmsl = False
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        pass
+    return info
+
+
+def get_installed_drivers_and_software(*, powershell: str = "powershell") -> dict[str, InstalledItem]:
+    installed: dict[str, InstalledItem] = {}
+    if not shutil.which(powershell):
+        return installed
+    script = """
+    $items = @()
+    $regPaths = @(
+        'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKLM:\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    )
+    foreach ($path in $regPaths) {
+        Get-ItemProperty $path -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.DisplayVersion } | ForEach-Object {
+            $items += @{
+                Name = $_.DisplayName
+                Version = $_.DisplayVersion
+                Publisher = $_.Publisher
+                Type = 'Registry'
+            }
+        }
+    }
+    Get-WmiObject Win32_PnPSignedDriver -ErrorAction SilentlyContinue | Where-Object { $_.DeviceName -and $_.DriverVersion } | ForEach-Object {
+        $items += @{
+            Name = $_.DeviceName
+            Version = $_.DriverVersion
+            Publisher = $_.Manufacturer
+            Type = 'Driver'
+        }
+    }
+    $bios = Get-WmiObject Win32_BIOS -ErrorAction SilentlyContinue
+    if ($bios) {
+        $items += @{
+            Name = 'System BIOS'
+            Version = $bios.SMBIOSBIOSVersion
+            Publisher = $bios.Manufacturer
+            Type = 'BIOS'
+        }
+    }
+    $items | ConvertTo-Json -Depth 2 -Compress
+    """
+    try:
+        result = subprocess.run([powershell, "-NoProfile", "-Command", script], capture_output=True, text=True, check=False, timeout=30)
+        if result.returncode == 0 and result.stdout:
+            data = json.loads(result.stdout)
+            if not isinstance(data, list):
+                data = [data]
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("Name", "").lower().strip()
+                version = item.get("Version", "")
+                publisher = item.get("Publisher")
+                if name and version and name not in installed:
+                    installed[name] = InstalledItem(name=item.get("Name", ""), version=version, publisher=publisher)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        pass
+    return installed
+
+
+def find_installed_version(driver_name: str, category: str | None, installed_cache: dict[str, InstalledItem]) -> str | None:
+    driver_lower = driver_name.lower()
+    search_terms: list[str] = []
+    if "intel" in driver_lower:
+        search_terms.append("intel")
+    if "realtek" in driver_lower:
+        search_terms.append("realtek")
+    if "nvidia" in driver_lower:
+        search_terms.append("nvidia")
+    if "amd" in driver_lower:
+        search_terms.append("amd")
+    if "bluetooth" in driver_lower:
+        search_terms.append("bluetooth")
+    if re.search(r"wireless|wlan|wifi", driver_lower):
+        search_terms.extend(["wireless", "wlan", "wifi"])
+    if re.search(r"graphics|video|display", driver_lower):
+        search_terms.extend(["graphics", "video", "display"])
+    if re.search(r"audio|sound", driver_lower):
+        search_terms.extend(["audio", "sound"])
+    if re.search(r"ethernet|nic|network", driver_lower):
+        search_terms.extend(["ethernet", "network"])
+    if "chipset" in driver_lower:
+        search_terms.append("chipset")
+    if re.search(r"storage|raid|rst|rapid", driver_lower):
+        search_terms.extend(["storage", "rapid", "rst"])
+    if "bios" in driver_lower:
+        search_terms.append("bios")
+    if "firmware" in driver_lower:
+        search_terms.append("firmware")
+    if re.search(r"management engine|me driver", driver_lower):
+        search_terms.append("management engine")
+    if "thunderbolt" in driver_lower:
+        search_terms.append("thunderbolt")
+    if re.search(r"serial io|serialio", driver_lower):
+        search_terms.append("serial")
+    if re.search(r"arc|a380|a770", driver_lower):
+        search_terms.append("arc")
+    if "usb 3" in driver_lower:
+        search_terms.append("usb 3")
+    best_match: InstalledItem | None = None
+    best_score = 0
+    for item_name, item_data in installed_cache.items():
+        score = 0
+        for term in search_terms:
+            if term in item_name:
+                score += 1
+        if category:
+            cat_lower = category.lower()
+            if "graphics" in cat_lower and re.search(r"graphics|display|video", item_name):
+                score += 2
+            if "audio" in cat_lower and re.search(r"audio|sound|realtek", item_name):
+                score += 2
+            if "network" in cat_lower and re.search(r"network|ethernet|wireless|wifi|bluetooth", item_name):
+                score += 2
+            if "chipset" in cat_lower and re.search(r"chipset|serial|management|usb", item_name):
+                score += 2
+            if "storage" in cat_lower and re.search(r"storage|rapid|rst|raid|optane", item_name):
+                score += 2
+            if re.search(r"bios|firmware", cat_lower) and re.search(r"bios|firmware", item_name):
+                score += 2
+        if score > best_score:
+            best_score = score
+            best_match = item_data
+    if best_match and best_score >= 2:
+        return best_match.version
+    return None
+
+
+def get_driver_status(driver_name: str, category: str | None, available_version: str | None, installed_cache: dict[str, InstalledItem]) -> tuple[str, str | None]:
+    installed_ver = find_installed_version(driver_name, category, installed_cache)
+    if not installed_ver:
+        return ("Not Installed", None)
+    cmp_result = _compare_versions(installed_ver, available_version)
+    if cmp_result > 0:
+        return ("Update Available", installed_ver)
+    if cmp_result == 0:
+        return ("Up to Date", installed_ver)
+    return ("Installed", installed_ver)
 
 
 class CommandRunner(Protocol):
@@ -102,17 +347,34 @@ class HPIAClient:
             return []
         data = json.loads(report_file.read_text(encoding="utf-8"))
         recommendations = data.get("HPIA", {}).get("Recommendations", [])
+        installed_cache = get_installed_drivers_and_software()
         records: list[DriverRecord] = []
         for rec in recommendations:
-            status = rec.get("RecommendationValue", "Optional")
+            rec_value = rec.get("RecommendationValue", "Optional")
+            driver_name = rec.get("Name", "Unknown")
+            category = rec.get("Category")
+            available_ver = rec.get("Version")
+            hpia_installed_ver = rec.get("CurrentVersion")
+            status_result, detected_installed_ver = get_driver_status(driver_name, category, available_ver, installed_cache)
+            final_installed = detected_installed_ver or hpia_installed_ver
+            if rec_value == "Critical":
+                status = "Critical"
+            elif rec_value == "Recommended":
+                status = "Recommended" if status_result in ("Not Installed", "Update Available") else status_result
+            elif status_result == "Update Available":
+                status = "Update Available"
+            elif status_result == "Not Installed":
+                status = "Optional"
+            else:
+                status = status_result
             records.append(
                 DriverRecord(
-                    name=rec.get("Name", "Unknown"),
+                    name=driver_name,
                     status=status,
                     source="HPIA",
-                    installed_version=rec.get("CurrentVersion"),
-                    latest_version=rec.get("Version"),
-                    category=rec.get("Category"),
+                    installed_version=final_installed,
+                    latest_version=available_ver,
+                    category=category,
                     softpaq_id=rec.get("SoftPaqId"),
                     download_url=rec.get("ReleaseNotesUrl"),
                 )
@@ -188,6 +450,7 @@ class CMSLClient:
             data = json.loads(result.stdout)
         except json.JSONDecodeError:
             return []
+        installed_cache = get_installed_drivers_and_software()
         records: list[DriverRecord] = []
         if isinstance(data, dict):
             data = [data]
@@ -197,13 +460,16 @@ class CMSLClient:
             category = item.get("Category", "")
             if "driver" not in category.lower() and "bios" not in category.lower() and "firmware" not in category.lower():
                 continue
+            driver_name = item.get("Name", "Unknown")
+            available_ver = item.get("Version")
+            status_result, installed_ver = get_driver_status(driver_name, category, available_ver, installed_cache)
             records.append(
                 DriverRecord(
-                    name=item.get("Name", "Unknown"),
-                    status="Available",
+                    name=driver_name,
+                    status=status_result,
                     source="CMSL",
-                    installed_version=None,
-                    latest_version=item.get("Version"),
+                    installed_version=installed_ver,
+                    latest_version=available_ver,
                     category=category,
                     softpaq_id=item.get("Id") or item.get("SoftPaqId"),
                     download_url=item.get("Url"),
@@ -244,19 +510,26 @@ class LegacyRepository:
                 data = json.loads(manifest.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 continue
+            installed_cache = get_installed_drivers_and_software()
             for item in data:
                 file_name = item.get("File") or item.get("Path")
                 if not file_name:
                     continue
                 file_path = candidate / file_name
+                driver_name = item.get("Name", "Legacy Driver")
+                category = item.get("Category")
+                available_ver = item.get("Version")
+                status_result, installed_ver = get_driver_status(driver_name, category, available_ver, installed_cache)
+                if "bios" in category.lower() and status_result == "Update Available":
+                    status_result = "Critical"
                 records.append(
                     DriverRecord(
-                        name=item.get("Name", "Legacy Driver"),
-                        status="Legacy",
+                        name=driver_name,
+                        status=status_result,
                         source="Legacy",
-                        installed_version=None,
-                        latest_version=item.get("Version"),
-                        category=item.get("Category"),
+                        installed_version=installed_ver,
+                        latest_version=available_ver,
+                        category=category,
                         softpaq_id=item.get("SoftPaqId"),
                         download_url=str(file_path),
                         output_path=file_path,
@@ -284,7 +557,7 @@ class DriverService:
         self._hpia = hpia_client or HPIAClient(self._working_dir)
         self._cmsl = cmsl_client or CMSLClient()
         self._legacy = legacy_repo or LegacyRepository(legacy_repo_root)
-        self._system_info_provider = system_info_provider or (lambda: HPSystemInfo())
+        self._system_info_provider = system_info_provider or get_hp_system_info
 
     def scan(self) -> list[DriverRecord]:
         info = self._system_info_provider()
