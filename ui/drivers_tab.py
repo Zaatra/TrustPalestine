@@ -41,8 +41,14 @@ class DriversTab(QWidget):
         self._settings = settings or UserSettings()
         self._refresh_service()
         self._records: list[DriverRecord] = []
+        self._workers: set[ServiceWorker] = set()
         self._busy = False
         self._build_ui()
+
+    def _track_worker(self, worker: ServiceWorker) -> None:
+        self._workers.add(worker)
+        worker.signals.finished.connect(lambda *_: self._workers.discard(worker))
+        worker.signals.error.connect(lambda *_: self._workers.discard(worker))
 
     def _refresh_service(self) -> None:
         legacy_root = self._settings.hp_legacy_repo_root.strip()
@@ -100,6 +106,7 @@ class DriversTab(QWidget):
         worker = ServiceWorker(self._service.scan)
         worker.signals.finished.connect(self._handle_scan_results)
         worker.signals.error.connect(self._handle_error)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_scan_results(self, records: Iterable[DriverRecord]) -> None:
@@ -124,6 +131,7 @@ class DriversTab(QWidget):
         worker = ServiceWorker(action, selected)
         worker.signals.finished.connect(lambda result, op=op: self._handle_driver_results(op, result))
         worker.signals.error.connect(self._handle_error)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_driver_results(self, op: str, results: Iterable[DriverOperationResult]) -> None:

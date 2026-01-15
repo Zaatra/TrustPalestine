@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
 from services.installer import (
+    DirectDownloadInfo,
     HPSADownloader,
     IVMSDownloader,
     LocalInstallerVersionInfo,
@@ -84,6 +85,7 @@ class AppStatusService:
         self._winget = winget_client or WingetClient()
         self._settings = settings or UserSettings()
         self._direct_downloaders = {"iVMS-4200": IVMSDownloader(), "HP Support Asst": HPSADownloader()}
+        self._direct_latest_info: dict[str, DirectDownloadInfo] = {}
 
     def scan_installed(self) -> list[InstalledInfo]:
         entries = self._read_uninstall_entries()
@@ -256,6 +258,15 @@ class AppStatusService:
             return None
         if self._latest_unknown(latest_text):
             return None
+        if app.name == "HP Support Asst":
+            latest_info = self._direct_latest_info.get(app.name)
+            if latest_info and local_versions.path:
+                latest_filename = (latest_info.filename or "").strip()
+                if latest_filename and local_versions.path.name.lower() == latest_filename.lower():
+                    return "Latest"
+            if not local_versions.version:
+                return None
+            return "Latest" if _version_ge(local_versions.version, latest_text) else "Outdated"
         if app.name in {"Office 2024 LTSC", "Office 365 Ent"}:
             if not local_versions.version:
                 return None
@@ -590,6 +601,7 @@ class AppStatusService:
             info = downloader.fetch()
         except Exception:
             return "Error"
+        self._direct_latest_info[app_name] = info
         if not info or not info.version:
             return "N/A"
         return info.version

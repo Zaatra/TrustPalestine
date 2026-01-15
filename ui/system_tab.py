@@ -35,9 +35,15 @@ class SystemTab(QWidget):
         self._thread_pool = thread_pool
         self._service = SystemConfigService(config)
         self._status_labels: Dict[str, QLabel] = {}
+        self._workers: set[ServiceWorker] = set()
         self._busy = False
         self._build_ui()
         self._start_check()
+
+    def _track_worker(self, worker: ServiceWorker) -> None:
+        self._workers.add(worker)
+        worker.signals.finished.connect(lambda *_: self._workers.discard(worker))
+        worker.signals.error.connect(lambda *_: self._workers.discard(worker))
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -76,6 +82,7 @@ class SystemTab(QWidget):
         worker = ServiceWorker(self._service.check)
         worker.signals.finished.connect(self._handle_check_results)
         worker.signals.error.connect(self._handle_error)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_check_results(self, results: list[ConfigCheckResult]) -> None:
@@ -103,6 +110,7 @@ class SystemTab(QWidget):
         worker = ServiceWorker(self._run_apply)
         worker.signals.finished.connect(lambda _: self._start_check())
         worker.signals.error.connect(self._handle_error)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _run_apply(self) -> None:

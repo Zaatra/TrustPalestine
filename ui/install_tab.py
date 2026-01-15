@@ -69,6 +69,7 @@ class InstallTab(QWidget):
         self._installed_map: dict[str, InstalledInfo] = {}
         self._latest_versions: dict[str, str] = {}
         self._row_by_name: dict[str, int] = {}
+        self._workers: set[ServiceWorker] = set()
         self._busy = False
         self._action_label = ""
         self._action_current = 0
@@ -147,6 +148,11 @@ class InstallTab(QWidget):
         self._refresh_offline_status()
         if not self._settings_store.exists():
             QTimer.singleShot(0, lambda: self._open_settings_dialog(force=True))
+
+    def _track_worker(self, worker: ServiceWorker) -> None:
+        self._workers.add(worker)
+        worker.signals.finished.connect(lambda *_: self._workers.discard(worker))
+        worker.signals.error.connect(lambda *_: self._workers.discard(worker))
 
     def _populate_table(self) -> None:
         self._table.setRowCount(len(self._registry.entries))
@@ -246,12 +252,16 @@ class InstallTab(QWidget):
         worker.signals.error.connect(self._handle_error)
         worker.signals.progress.connect(self._handle_action_progress)
         worker.signals.message.connect(self._handle_action_message)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_results(self, action: str, results: Iterable[OperationResult]) -> None:
-        for result in results:
-            status = "OK" if result.success else "FAIL"
-            self._log(f"[{status}] {action} :: {result.app.name} -> {result.message}")
+        try:
+            for result in results:
+                status = "OK" if result.success else "FAIL"
+                self._log(f"[{status}] {action} :: {result.app.name} -> {result.message}")
+        except Exception as exc:
+            self._log(f"[ERROR] Failed to process results: {exc}")
         self._busy = False
         self._set_buttons_enabled(True)
         self._complete_action_progress()
@@ -360,6 +370,7 @@ class InstallTab(QWidget):
         worker = ServiceWorker(self._status_service.scan_installed)
         worker.signals.finished.connect(self._handle_installed_results)
         worker.signals.error.connect(self._handle_error)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_installed_results(self, results: Iterable[InstalledInfo]) -> None:
@@ -449,6 +460,7 @@ class InstallTab(QWidget):
         worker.signals.finished.connect(self._handle_update_results)
         worker.signals.error.connect(self._handle_error)
         worker.signals.progress.connect(self._handle_update_progress)
+        self._track_worker(worker)
         self._thread_pool.start(worker)
 
     def _handle_update_results(self, results: Iterable[AppUpdateResult]) -> None:

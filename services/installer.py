@@ -354,9 +354,19 @@ class LocalInstallerVersionInfo:
     version: str | None = None
     version_x86: str | None = None
     version_x64: str | None = None
+    path: Path | None = None
+    path_x86: Path | None = None
+    path_x64: Path | None = None
 
     def has_any(self) -> bool:
-        return bool(self.version or self.version_x86 or self.version_x64)
+        return bool(
+            self.version
+            or self.version_x86
+            or self.version_x64
+            or self.path
+            or self.path_x86
+            or self.path_x64
+        )
 
 
 class DirectDownloader(Protocol):
@@ -570,8 +580,13 @@ class InstallerService:
             return LocalInstallerVersionInfo(
                 version_x86=_local_version_from_path(info.path_x86),
                 version_x64=_local_version_from_path(info.path_x64),
+                path_x86=info.path_x86,
+                path_x64=info.path_x64,
             )
-        return LocalInstallerVersionInfo(version=_local_version_from_path(info.path))
+        return LocalInstallerVersionInfo(
+            version=_local_version_from_path(info.path),
+            path=info.path,
+        )
 
     def install_selected(
         self,
